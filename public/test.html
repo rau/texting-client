@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tailwind Test</title>
+    <style>
+        /* Inline styles to test if CSS is working at all */
+        .inline-bg-blue-500 {
+            background-color: #3b82f6;
+        }
+
+        .inline-text-white {
+            color: #ffffff;
+        }
+
+        .inline-p-4 {
+            padding: 1rem;
+        }
+
+        .inline-rounded {
+            border-radius: 0.25rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="p-8">
+        <h1 class="text-2xl font-bold mb-4">Tailwind CSS Test</h1>
+
+        <!-- Test with inline styles -->
+        <div class="inline-bg-blue-500 inline-text-white inline-p-4 inline-rounded mb-4">
+            This has inline styles (blue background, white text)
+        </div>
+
+        <!-- Test with Tailwind classes -->
+        <div class="bg-blue-500 text-white p-4 rounded mb-4">
+            This should have Tailwind styles (blue background, white text)
+        </div>
+
+        <div class="border border-gray-200 rounded p-4 shadow">
+            <p class="text-gray-800 mb-2">This should be a card with Tailwind styles</p>
+            <button class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded">
+                Tailwind Button
+            </button>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,76 @@
+/* Debug CSS to test style loading */
+.bg-blue-500 {
+	background-color: #3b82f6 !important;
+}
+
+.text-white {
+	color: #ffffff !important;
+}
+
+.rounded-lg {
+	border-radius: 0.5rem !important;
+}
+
+.p-4 {
+	padding: 1rem !important;
+}
+
+.flex {
+	display: flex !important;
+}
+
+.h-screen {
+	height: 100vh !important;
+}
+
+.bg-gray-100 {
+	background-color: #f3f4f6 !important;
+}
+
+.border-gray-200 {
+	border-color: #e5e7eb !important;
+}
+
+.border {
+	border-width: 1px !important;
+	border-style: solid !important;
+}
+
+.w-1\/4 {
+	width: 25% !important;
+}
+
+.bg-white {
+	background-color: #ffffff !important;
+}
+
+.border-r {
+	border-right-width: 1px !important;
+	border-right-style: solid !important;
+}
+
+.border-b {
+	border-bottom-width: 1px !important;
+	border-bottom-style: solid !important;
+}
+
+.text-2xl {
+	font-size: 1.5rem !important;
+	line-height: 2rem !important;
+}
+
+.font-bold {
+	font-weight: 700 !important;
+}
+
+.text-gray-800 {
+	color: #1f2937 !important;
+}
+
+.overflow-y-auto {
+	overflow-y: auto !important;
+}
+
+.text-red-500 {
+	color: #ef4444 !important;
+}
