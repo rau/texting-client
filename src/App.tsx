@@ -457,44 +457,49 @@ function App() {
 	}
 
 	const handleSearch = async (params: SearchParams) => {
-		if (!params.query.trim()) return
+		console.log("handleSearch", params)
 
 		setIsSearching(true)
 
 		try {
-			// Build a more advanced search query with additional filters
-			let query = params.query
+			// Initialize query parts array to build the search query
+			const queryParts: string[] = []
+
+			// Add text search if provided
+			if (params.query.trim()) {
+				queryParts.push(params.query.trim())
+			}
 
 			// Add date filters if provided
-			if (params.startDate || params.endDate) {
-				// Date filters will be handled on the Rust side
-				// Using a placeholder format that will be parsed
-				if (params.startDate) {
-					const startTimestamp = Math.floor(params.startDate.getTime() / 1000)
-					query += ` AFTER:${startTimestamp}`
-				}
-				if (params.endDate) {
-					const endTimestamp = Math.floor(params.endDate.getTime() / 1000)
-					query += ` BEFORE:${endTimestamp}`
-				}
+			if (params.startDate) {
+				const startTimestamp = Math.floor(params.startDate.getTime() / 1000)
+				queryParts.push(`AFTER:${startTimestamp}`)
+			}
+			if (params.endDate) {
+				const endTimestamp = Math.floor(params.endDate.getTime() / 1000)
+				queryParts.push(`BEFORE:${endTimestamp}`)
 			}
 
 			// Add contact filter if provided
 			if (params.selectedContact) {
-				if (
-					params.selectedContact.type === "phone" &&
-					params.selectedContact.value
-				) {
-					query += ` FROM:${params.selectedContact.value}`
-				} else if (
-					params.selectedContact.type === "email" &&
-					params.selectedContact.value
-				) {
-					query += ` FROM:${params.selectedContact.value}`
-				} else {
-					query += ` FROM:${params.selectedContact.name}`
-				}
+				const contactValue =
+					params.selectedContact.type === "phone" ||
+					params.selectedContact.type === "email"
+						? params.selectedContact.value
+						: params.selectedContact.name
+				queryParts.push(`FROM:${contactValue}`)
 			}
+
+			// If no search parameters are provided, return early with an empty result
+			if (queryParts.length === 0) {
+				setSearchResults({ messages: [], total_count: 0 })
+				setSelectedConversation(null)
+				setIsSearching(false)
+				return
+			}
+
+			// Join all query parts with spaces
+			const query = queryParts.join(" ")
 
 			console.log("Advanced search query:", query)
 			const results = await invoke("search_messages", { query })
@@ -518,11 +523,7 @@ function App() {
 			{/* Search Bar with Contacts Toggle Button */}
 			<div className='p-4 bg-white border-b border-gray-200'>
 				<div className='flex flex-col space-y-2'>
-					<AdvancedSearch
-						onSearch={handleSearch}
-						isSearching={isSearching}
-						contactMap={contactMap}
-					/>
+					<AdvancedSearch onSearch={handleSearch} contactMap={contactMap} />
 				</div>
 			</div>
 

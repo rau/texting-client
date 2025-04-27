@@ -40,7 +40,6 @@ type ContactMap = {
 
 type AdvancedSearchProps = {
 	onSearch: (params: SearchParams) => void
-	isSearching: boolean
 	contactMap: ContactMap
 }
 
@@ -51,11 +50,7 @@ export type SearchParams = {
 	selectedContact: ContactInfo | null
 }
 
-export function AdvancedSearch({
-	onSearch,
-	isSearching,
-	contactMap,
-}: AdvancedSearchProps) {
+export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 	const [searchParams, setSearchParams] = useState<SearchParams>({
 		query: "",
 		startDate: undefined,
@@ -80,6 +75,20 @@ export function AdvancedSearch({
 			...prev,
 			selectedContact: null,
 		}))
+	}
+
+	const handleDateSelect = (type: "start" | "end", date: Date | undefined) => {
+		setSearchParams((prev) => {
+			const newParams = {
+				...prev,
+				[type === "start" ? "startDate" : "endDate"]: date,
+			}
+			// Trigger search automatically if we have a date range
+			if (newParams.startDate || newParams.endDate) {
+				onSearch(newParams)
+			}
+			return newParams
+		})
 	}
 
 	return (
@@ -117,12 +126,7 @@ export function AdvancedSearch({
 										<Calendar
 											mode='single'
 											selected={searchParams.startDate}
-											onSelect={(date) => {
-												setSearchParams((prev) => ({
-													...prev,
-													startDate: date,
-												}))
-											}}
+											onSelect={(date) => handleDateSelect("start", date)}
 											initialFocus
 										/>
 									</PopoverContent>
@@ -154,12 +158,7 @@ export function AdvancedSearch({
 										<Calendar
 											mode='single'
 											selected={searchParams.endDate}
-											onSelect={(date) => {
-												setSearchParams((prev) => ({
-													...prev,
-													endDate: date,
-												}))
-											}}
+											onSelect={(date) => handleDateSelect("end", date)}
 											initialFocus
 										/>
 									</PopoverContent>
@@ -288,16 +287,6 @@ export function AdvancedSearch({
 							/>
 						</div>
 					</div>
-
-					{/* Search Button */}
-					<Button
-						className='w-full'
-						size='lg'
-						onClick={handleSearch}
-						disabled={isSearching}
-					>
-						{isSearching ? "Searching..." : "Search Messages"}
-					</Button>
 				</div>
 			</CardContent>
 		</Card>

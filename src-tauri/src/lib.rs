@@ -96,7 +96,6 @@ fn get_imessage_db_path() -> Result<PathBuf, AppError> {
     // If not, we'll need to copy it to a temporary location with proper permissions
     match Connection::open(&db_path) {
         Ok(_) => {
-            println!("Successfully opened database directly");
             Ok(db_path)
         },
         Err(_e) => {
@@ -313,7 +312,6 @@ async fn read_contacts() -> Result<String, AppError> {
                         format!("Contact [ID: {}]: {}", id, full_name)
                     };
                     
-                    println!("Found contact: {}", contact_info);
                     contact_count += 1;
                     
                     Ok(contact_info)
@@ -366,7 +364,6 @@ async fn read_contacts() -> Result<String, AppError> {
                         email
                     );
                     
-                    println!("Found email with contact: {}", contact_info);
                     email_count += 1;
                     
                     Ok(contact_info)
@@ -419,7 +416,6 @@ async fn read_contacts() -> Result<String, AppError> {
                         phone
                     );
                     
-                    println!("Found phone with contact: {}", contact_info);
                     phone_count += 1;
                     
                     Ok(contact_info)
@@ -488,7 +484,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     
     let conn = match Connection::open(&db_path) {
         Ok(conn) => {
-            println!("Successfully opened database connection");
             conn
         },
         Err(e) => {
@@ -533,7 +528,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
             _ => 0, // Default to 0 for NULL or invalid dates
         };
         
-        println!("Processing conversation: id={}, name={:?}, date={}", chat_id, display_name, last_message_date);
         
         Ok(Conversation {
             id: chat_id.to_string(),
@@ -547,7 +541,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     for conversation in conversation_iter {
         match conversation {
             Ok(conv) => {
-                println!("Found conversation: id={}, name={:?}", conv.id, conv.name);
                 conversations.push(conv);
             },
             Err(e) => println!("Error processing conversation: {:?}", e),
@@ -600,7 +593,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
 
 #[tauri::command]
 async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError> {
-    println!("Fetching messages for conversation ID: {}", conversation_id);
     
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
@@ -683,7 +675,6 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
         }
     }
     
-    println!("Total messages found: {}", messages.len());
     Ok(messages)
 }
 
@@ -754,23 +745,31 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             chat_message_join cmj ON m.ROWID = cmj.message_id
         LEFT JOIN
             handle h ON m.handle_id = h.ROWID
-        WHERE 
-            m.text LIKE ?
+        WHERE 1=1
     "#);
     
-    // Add date filters if provided
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(text_query)];
+    // Add text search if provided (not empty and not just %)
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if text_query != "%" {
+        sql.push_str(" AND m.text LIKE ?");
+        params.push(Box::new(text_query));
+    }
     
+    // Add date filters if provided
     if let Some(start_time) = start_timestamp {
-        // Convert Unix timestamp to Apple timestamp (seconds to nanoseconds)
-        let apple_start = start_time as i64 * 1_000_000_000;
+        // Convert Unix timestamp to Apple timestamp:
+        // 1. Subtract the Apple epoch offset (978307200 seconds since Unix epoch)
+        // 2. Convert to nanoseconds
+        let apple_start = (start_time - 978307200) * 1_000_000_000;
         sql.push_str(" AND m.date >= ?");
         params.push(Box::new(apple_start));
     }
     
     if let Some(end_time) = end_timestamp {
-        // Convert Unix timestamp to Apple timestamp (seconds to nanoseconds)
-        let apple_end = end_time as i64 * 1_000_000_000;
+        // Convert Unix timestamp to Apple timestamp:
+        // 1. Subtract the Apple epoch offset (978307200 seconds since Unix epoch)
+        // 2. Convert to nanoseconds
+        let apple_end = (end_time - 978307200) * 1_000_000_000;
         sql.push_str(" AND m.date <= ?");
         params.push(Box::new(apple_end));
     }
@@ -864,8 +863,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
         
-        println!("Found matching message: id={}, chat_id={:?}, sender={:?}", 
-            message_id, chat_id, sender_name);
         
         Ok(Message {
             id: message_id,
