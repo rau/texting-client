@@ -50,6 +50,7 @@ function App() {
 	const [messagesByConversation, setMessagesByConversation] =
 		useState<MessagesByConversation>({})
 	const [loading, setLoading] = useState<boolean>(true)
+	const [contactsLoading, setContactsLoading] = useState<boolean>(true)
 	const [error, setError] = useState<string | null>(null)
 	const [searchQuery, setSearchQuery] = useState<string>("")
 	const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
@@ -248,42 +249,37 @@ function App() {
 	): string => {
 		// If conversation already has a name, use it
 		if (conversation.name) {
+			const contactName = getContactNameForSender(conversation.name)
+			if (contactName) {
+				return contactName
+			}
 			return conversation.name
 		}
 
 		// Get unique participants from messages
 		const participants = new Set<string>()
-
 		messagesForConversation.forEach((message) => {
-			if (
-				!message.is_from_me &&
-				(message.contact_name || message.sender_name)
-			) {
-				participants.add(message.contact_name || message.sender_name!)
+			if (!message.is_from_me && message.sender_name) {
+				const contactName = getContactNameForSender(message.sender_name)
+				participants.add(contactName || message.sender_name)
 			}
 		})
 
-		// Convert to array and sort
-		const participantNames = Array.from(participants).sort()
+		const participantList = Array.from(participants)
 
-		// No participants found
-		if (participantNames.length === 0) {
+		if (participantList.length === 0) {
 			return "Conversation"
 		}
 
-		// Single participant
-		if (participantNames.length === 1) {
-			return participantNames[0]
+		if (participantList.length === 1) {
+			return participantList[0]
 		}
 
-		// 2 participants
-		if (participantNames.length === 2) {
-			return `${participantNames[0]} & ${participantNames[1]}`
+		if (participantList.length === 2) {
+			return `${participantList[0]} and ${participantList[1]}`
 		}
 
-		// 3 or more participants (Apple style: "A, B, & C")
-		const lastParticipant = participantNames.pop()!
-		return `${participantNames.join(", ")}, & ${lastParticipant}`
+		return `${participantList[0]} and ${participantList.length - 1} others`
 	}
 
 	// Helper function to preload messages for each conversation
@@ -387,6 +383,7 @@ function App() {
 		// Load contacts automatically when the app starts
 		const loadContacts = async () => {
 			try {
+				setContactsLoading(true)
 				const contacts = await invoke("read_contacts")
 				console.log("Fetched contacts:", contacts)
 				setContactsData(contacts as string)
@@ -394,12 +391,12 @@ function App() {
 				console.error("Failed to load contacts:", error)
 				setContactsData("Error loading contacts: " + String(error))
 			} finally {
+				setContactsLoading(false)
 			}
 		}
 
 		// Load both conversations and contacts
-		loadConversations()
-		loadContacts()
+		Promise.all([loadConversations(), loadContacts()])
 
 		// Debug: Log if styles are applied
 		console.log(
@@ -408,6 +405,9 @@ function App() {
 				.backgroundColor
 		)
 	}, [])
+
+	// Combine loading states for overall app loading state
+	const isAppLoading = loading || contactsLoading
 
 	const handleSelectConversation = async (conversationId: string) => {
 		setSelectedConversation(conversationId)
@@ -514,6 +514,14 @@ function App() {
 				queryParts.push(`(${fromConditions.join(" OR ")})`)
 			}
 
+			// Add conversation filter if provided
+			if (params.selectedConversation) {
+				const conversationId = params.selectedConversation.id
+				// Escape any quotes in the conversation ID and wrap in quotes
+				const escapedId = conversationId.replace(/"/g, '\\"')
+				queryParts.push(`CONVERSATION:"${escapedId}"`)
+			}
+
 			// If no search parameters are provided, return early with an empty result
 			if (queryParts.length === 0) {
 				setSearchResults({ messages: [], total_count: 0 })
@@ -544,208 +552,247 @@ function App() {
 
 	return (
 		<div className='flex flex-col h-screen bg-gray-100'>
-			{/* Search Bar with Contacts Toggle Button */}
-			<div className='p-4 bg-white border-b border-gray-200'>
-				<div className='flex flex-col space-y-2'>
-					<AdvancedSearch onSearch={handleSearch} contactMap={contactMap} />
+			{isAppLoading ? (
+				<div className='flex justify-center items-center h-full'>
+					<div className='animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500'></div>
 				</div>
-			</div>
-
-			<div className='flex flex-1 overflow-hidden'>
-				{/* Sidebar */}
-				<div className='w-1/4 bg-white border-r border-gray-200 overflow-y-auto'>
-					<div className='p-4 border-b border-gray-200'>
-						<h1 className='text-2xl font-bold text-gray-800'>Conversations</h1>
+			) : (
+				<>
+					{/* Search Bar with Contacts Toggle Button */}
+					<div className='p-4 bg-white border-b border-gray-200'>
+						<div className='flex flex-col space-y-2'>
+							<AdvancedSearch
+								onSearch={handleSearch}
+								contactMap={contactMap}
+								conversations={conversations.map((conv) => ({
+									id: conv.id,
+									name:
+										conversationTitles[conv.id] || conv.name || "Conversation",
+									participants:
+										messagesByConversation[conv.id]
+											?.filter(
+												(msg) =>
+													!msg.is_from_me &&
+													(msg.contact_name || msg.sender_name)
+											)
+											?.map((msg) => ({
+												id: msg.sender_name || msg.contact_name || "",
+												name: msg.contact_name || msg.sender_name || "",
+												type: "contact" as const,
+											}))
+											?.filter(
+												(participant, index, self) =>
+													index ===
+													self.findIndex((p) => p.id === participant.id)
+											) || [],
+								}))}
+							/>
+						</div>
 					</div>
 
-					<div className='overflow-y-auto h-full'>
-						{loading && !conversations.length ? (
-							<div className='flex justify-center items-center h-full'>
-								<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
+					<div className='flex flex-1 overflow-hidden'>
+						{/* Sidebar */}
+						<div className='w-1/4 bg-white border-r border-gray-200 overflow-y-auto'>
+							<div className='p-4 border-b border-gray-200'>
+								<h1 className='text-2xl font-bold text-gray-800'>
+									Conversations
+								</h1>
 							</div>
-						) : error ? (
-							<div className='p-4 text-center text-red-500'>{error}</div>
-						) : (
-							<ul>
-								{conversations.length ? (
-									conversations.map((conversation) => (
-										<li
-											key={conversation.id}
-											className={`p-4 border-b border-gray-200 cursor-pointer hover:bg-gray-50 ${
-												selectedConversation === conversation.id
-													? "bg-blue-50"
-													: ""
-											}`}
-											onClick={() => handleSelectConversation(conversation.id)}
-											tabIndex={0}
-											aria-label={`Conversation with ${
-												conversation.name || "Unknown"
-											}`}
-											onKeyDown={(e) => {
-												if (e.key === "Enter" || e.key === " ") {
-													handleSelectConversation(conversation.id)
-												}
-											}}
-										>
-											<div className='font-medium text-gray-800'>
-												{conversationTitles[conversation.id] ||
-													conversation.name ||
-													"Conversation"}
-											</div>
-											<div className='text-sm text-gray-500 truncate'>
-												{conversation.last_message || "No messages"}
-											</div>
-											<div className='text-xs text-gray-400'>
-												{conversation.last_message_date
-													? new Date(
-															conversation.last_message_date * 1000
-													  ).toLocaleDateString()
-													: ""}
-											</div>
-										</li>
-									))
-								) : (
-									<div className='p-4 text-center text-gray-500'>
-										No conversations found
+
+							<div className='overflow-y-auto h-full'>
+								{loading && !conversations.length ? (
+									<div className='flex justify-center items-center h-full'>
+										<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
 									</div>
-								)}
-							</ul>
-						)}
-					</div>
-				</div>
-
-				{/* Main Content */}
-				<div className='flex-1 flex flex-col overflow-hidden'>
-					{/* Top Bar */}
-					<div className='p-4 border-b border-gray-200 bg-white'>
-						<h2 className='text-xl font-semibold text-gray-800'>
-							{selectedConversation
-								? (() => {
-										const conversation = conversations.find(
-											(c) => c.id === selectedConversation
-										)
-										if (!conversation) return "Conversation"
-										return (
-											conversationTitles[selectedConversation] ||
-											conversation.name ||
-											"Conversation"
-										)
-								  })()
-								: searchResults
-								? `Search Results (${searchResults.total_count})`
-								: "Select a conversation"}
-						</h2>
-					</div>
-
-					{/* Messages Area - add ref here */}
-					<div
-						ref={messagesContainerRef}
-						className='flex-1 overflow-y-auto p-4 bg-gray-50'
-					>
-						{loading ? (
-							<div className='flex justify-center items-center h-full'>
-								<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
-							</div>
-						) : searchResultsWithContactNames ? (
-							// Search Results
-							<div className='space-y-4'>
-								{searchResultsWithContactNames.messages.length > 0 ? (
-									searchResultsWithContactNames.messages.map((message) => (
-										<div
-											key={message.id}
-											className='border border-gray-200 rounded-lg p-4 bg-white'
-										>
-											<div
-												className={`max-w-full rounded-lg px-4 py-2 ${
-													message.is_from_me
-														? "bg-blue-100 text-blue-800"
-														: "bg-gray-100 text-gray-800"
-												}`}
-											>
-												{!message.is_from_me &&
-													(message.contact_name || message.sender_name) && (
-														<div className='text-xs font-medium text-gray-600 mb-1'>
-															{message.contact_name || message.sender_name}
-														</div>
-													)}
-												<div className='text-sm'>{message.text}</div>
-												<div className='text-xs mt-1 text-gray-500'>
-													{new Date(message.date * 1000).toLocaleString()}
-												</div>
-											</div>
-											{message.chat_id && (
-												<button
-													onClick={() => jumpToConversation(message.chat_id!)}
-													className='mt-2 text-sm text-blue-600 hover:underline'
+								) : error ? (
+									<div className='p-4 text-center text-red-500'>{error}</div>
+								) : (
+									<ul>
+										{conversations.length ? (
+											conversations.map((conversation) => (
+												<li
+													key={conversation.id}
+													className={`p-4 border-b border-gray-200 cursor-pointer hover:bg-gray-50 ${
+														selectedConversation === conversation.id
+															? "bg-blue-50"
+															: ""
+													}`}
+													onClick={() =>
+														handleSelectConversation(conversation.id)
+													}
+													tabIndex={0}
+													aria-label={`Conversation with ${
+														conversation.name || "Unknown"
+													}`}
+													onKeyDown={(e) => {
+														if (e.key === "Enter" || e.key === " ") {
+															handleSelectConversation(conversation.id)
+														}
+													}}
 												>
-													Go to conversation
-												</button>
-											)}
+													<div className='font-medium text-gray-800'>
+														{conversationTitles[conversation.id] ||
+															conversation.name ||
+															"Conversation"}
+													</div>
+													<div className='text-sm text-gray-500 truncate'>
+														{conversation.last_message || "No messages"}
+													</div>
+													<div className='text-xs text-gray-400'>
+														{conversation.last_message_date
+															? new Date(
+																	conversation.last_message_date * 1000
+															  ).toLocaleDateString()
+															: ""}
+													</div>
+												</li>
+											))
+										) : (
+											<div className='p-4 text-center text-gray-500'>
+												No conversations found
+											</div>
+										)}
+									</ul>
+								)}
+							</div>
+						</div>
+
+						{/* Main Content */}
+						<div className='flex-1 flex flex-col overflow-hidden'>
+							{/* Top Bar */}
+							<div className='p-4 border-b border-gray-200 bg-white'>
+								<h2 className='text-xl font-semibold text-gray-800'>
+									{selectedConversation
+										? (() => {
+												const conversation = conversations.find(
+													(c) => c.id === selectedConversation
+												)
+												if (!conversation) return "Conversation"
+												return (
+													conversationTitles[selectedConversation] ||
+													conversation.name ||
+													"Conversation"
+												)
+										  })()
+										: searchResults
+										? `Search Results (${searchResults.total_count})`
+										: "Select a conversation"}
+								</h2>
+							</div>
+
+							{/* Messages Area - add ref here */}
+							<div
+								ref={messagesContainerRef}
+								className='flex-1 overflow-y-auto p-4 bg-gray-50'
+							>
+								{loading ? (
+									<div className='flex justify-center items-center h-full'>
+										<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
+									</div>
+								) : searchResultsWithContactNames ? (
+									// Search Results
+									<div className='space-y-4'>
+										{searchResultsWithContactNames.messages.length > 0 ? (
+											searchResultsWithContactNames.messages.map((message) => (
+												<div
+													key={message.id}
+													className='border border-gray-200 rounded-lg p-4 bg-white'
+												>
+													<div
+														className={`max-w-full rounded-lg px-4 py-2 ${
+															message.is_from_me
+																? "bg-blue-100 text-blue-800"
+																: "bg-gray-100 text-gray-800"
+														}`}
+													>
+														{!message.is_from_me &&
+															(message.contact_name || message.sender_name) && (
+																<div className='text-xs font-medium text-gray-600 mb-1'>
+																	{message.contact_name || message.sender_name}
+																</div>
+															)}
+														<div className='text-sm'>{message.text}</div>
+														<div className='text-xs mt-1 text-gray-500'>
+															{new Date(message.date * 1000).toLocaleString()}
+														</div>
+													</div>
+													{message.chat_id && (
+														<button
+															onClick={() =>
+																jumpToConversation(message.chat_id!)
+															}
+															className='mt-2 text-sm text-blue-600 hover:underline'
+														>
+															Go to conversation
+														</button>
+													)}
+												</div>
+											))
+										) : (
+											<div className='flex justify-center items-center h-full'>
+												<p className='text-gray-500'>
+													No messages found containing "{searchQuery}"
+												</p>
+											</div>
+										)}
+									</div>
+								) : selectedConversation ? (
+									// Regular conversation view
+									messagesWithContactNames.length ? (
+										<div className='space-y-4'>
+											{messagesWithContactNames.map((message) => (
+												<div
+													key={message.id}
+													className={`flex ${
+														message.is_from_me ? "justify-end" : "justify-start"
+													}`}
+												>
+													<div
+														className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
+															message.is_from_me
+																? "bg-blue-500 text-white rounded-br-none"
+																: "bg-gray-200 text-gray-800 rounded-bl-none"
+														}`}
+													>
+														{!message.is_from_me &&
+															(message.contact_name || message.sender_name) && (
+																<div className='text-xs font-medium text-gray-600 mb-1'>
+																	{message.contact_name || message.sender_name}
+																</div>
+															)}
+														<div className='text-sm'>{message.text}</div>
+														<div className='text-xs text-right mt-1 opacity-70'>
+															{new Date(message.date * 1000).toLocaleTimeString(
+																[],
+																{
+																	hour: "2-digit",
+																	minute: "2-digit",
+																}
+															)}
+														</div>
+													</div>
+												</div>
+											))}
 										</div>
-									))
+									) : (
+										<div className='flex justify-center items-center h-full'>
+											<p className='text-gray-500'>
+												No messages in this conversation
+											</p>
+										</div>
+									)
 								) : (
 									<div className='flex justify-center items-center h-full'>
 										<p className='text-gray-500'>
-											No messages found containing "{searchQuery}"
+											Search for messages or select a conversation
 										</p>
 									</div>
 								)}
 							</div>
-						) : selectedConversation ? (
-							// Regular conversation view
-							messagesWithContactNames.length ? (
-								<div className='space-y-4'>
-									{messagesWithContactNames.map((message) => (
-										<div
-											key={message.id}
-											className={`flex ${
-												message.is_from_me ? "justify-end" : "justify-start"
-											}`}
-										>
-											<div
-												className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
-													message.is_from_me
-														? "bg-blue-500 text-white rounded-br-none"
-														: "bg-gray-200 text-gray-800 rounded-bl-none"
-												}`}
-											>
-												{!message.is_from_me &&
-													(message.contact_name || message.sender_name) && (
-														<div className='text-xs font-medium text-gray-600 mb-1'>
-															{message.contact_name || message.sender_name}
-														</div>
-													)}
-												<div className='text-sm'>{message.text}</div>
-												<div className='text-xs text-right mt-1 opacity-70'>
-													{new Date(message.date * 1000).toLocaleTimeString(
-														[],
-														{
-															hour: "2-digit",
-															minute: "2-digit",
-														}
-													)}
-												</div>
-											</div>
-										</div>
-									))}
-								</div>
-							) : (
-								<div className='flex justify-center items-center h-full'>
-									<p className='text-gray-500'>
-										No messages in this conversation
-									</p>
-								</div>
-							)
-						) : (
-							<div className='flex justify-center items-center h-full'>
-								<p className='text-gray-500'>
-									Search for messages or select a conversation
-								</p>
-							</div>
-						)}
+						</div>
 					</div>
-				</div>
-			</div>
+				</>
+			)}
 		</div>
 	)
 }

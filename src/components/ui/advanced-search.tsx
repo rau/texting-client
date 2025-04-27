@@ -33,6 +33,12 @@ type ContactInfo = {
 	value?: string
 }
 
+type ConversationInfo = {
+	id: string
+	name: string
+	participants: ContactInfo[]
+}
+
 type ContactMap = {
 	byId: Record<string, ContactInfo>
 	byPhone: Record<string, ContactInfo>
@@ -42,6 +48,7 @@ type ContactMap = {
 type AdvancedSearchProps = {
 	onSearch: (params: SearchParams) => void
 	contactMap: ContactMap
+	conversations: ConversationInfo[]
 }
 
 export type SearchParams = {
@@ -49,14 +56,20 @@ export type SearchParams = {
 	startDate: Date | undefined
 	endDate: Date | undefined
 	selectedContact: ContactInfo | null
+	selectedConversation: ConversationInfo | null
 }
 
-export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
+export function AdvancedSearch({
+	onSearch,
+	contactMap,
+	conversations,
+}: AdvancedSearchProps) {
 	const [searchParams, setSearchParams] = useState<SearchParams>({
 		query: "",
 		startDate: undefined,
 		endDate: undefined,
 		selectedContact: null,
+		selectedConversation: null,
 	})
 	// Collect all contacts from the contactMap and sort them alphabetically by name
 	const contacts = useMemo(() => {
@@ -80,6 +93,17 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 			const newParams = {
 				...prev,
 				selectedContact: null,
+			}
+			onSearch(newParams)
+			return newParams
+		})
+	}
+
+	const clearSelectedConversation = () => {
+		setSearchParams((prev) => {
+			const newParams = {
+				...prev,
+				selectedConversation: null,
 			}
 			onSearch(newParams)
 			return newParams
@@ -279,6 +303,75 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 								</PopoverContent>
 							</Popover>
 						</div>
+
+						{/* Conversation Selector */}
+						<div className='space-y-1.5'>
+							<Label
+								htmlFor='conversation-select'
+								className='text-sm font-medium'
+							>
+								Select Conversation
+							</Label>
+							<Popover>
+								<PopoverTrigger>
+									<Button
+										id='conversation-select'
+										type='button'
+										variant='outline'
+										role='combobox'
+										className={cn(
+											"justify-between w-full",
+											!searchParams.selectedConversation &&
+												"text-muted-foreground"
+										)}
+									>
+										{searchParams.selectedConversation
+											? searchParams.selectedConversation.name
+											: "Select conversation"}
+										<ChevronDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
+									</Button>
+								</PopoverTrigger>
+								<PopoverContent
+									className='w-full p-0'
+									align='start'
+									side='bottom'
+								>
+									<Command className='w-[400px]'>
+										<CommandInput placeholder='Search conversations...' />
+										<CommandList>
+											<CommandEmpty>No conversations found.</CommandEmpty>
+											<CommandGroup>
+												{conversations.map((conversation) => (
+													<CommandItem
+														key={conversation.id}
+														onSelect={() => {
+															setSearchParams((prev) => {
+																const newParams = {
+																	...prev,
+																	selectedConversation: conversation,
+																}
+																onSearch(newParams)
+																return newParams
+															})
+														}}
+														className='flex items-center gap-2 cursor-pointer'
+													>
+														<div className='flex flex-col'>
+															<span className='font-medium'>
+																{conversation.name}
+															</span>
+															<span className='text-xs text-muted-foreground'>
+																{conversation.participants.length} participants
+															</span>
+														</div>
+													</CommandItem>
+												))}
+											</CommandGroup>
+										</CommandList>
+									</Command>
+								</PopoverContent>
+							</Popover>
+						</div>
 					</div>
 
 					{/* Selected Contact Display */}
@@ -325,6 +418,61 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 											</div>
 										</Badge>
 									))}
+							</div>
+						</div>
+					)}
+
+					{/* Selected Conversation Display */}
+					{searchParams.selectedConversation && (
+						<div className='flex flex-col gap-2 bg-muted/50 rounded-lg p-3'>
+							<div className='flex items-center justify-between'>
+								<div className='text-sm font-medium'>
+									Selected Conversation Details:
+								</div>
+								<Button
+									variant='ghost'
+									size='icon'
+									className='h-6 w-6 p-0'
+									onClick={clearSelectedConversation}
+								>
+									<X className='h-4 w-4' />
+									<span className='sr-only'>Remove</span>
+								</Button>
+							</div>
+							<div className='flex flex-wrap gap-2'>
+								<Badge
+									variant='secondary'
+									className='flex items-center gap-1 py-1 px-3'
+								>
+									<div className='flex flex-col text-xs'>
+										<span className='font-medium'>
+											{searchParams.selectedConversation.name}
+										</span>
+										<span className='text-muted-foreground'>
+											ID: {searchParams.selectedConversation.id} • Participants:{" "}
+											{searchParams.selectedConversation.participants.length}
+										</span>
+									</div>
+								</Badge>
+								{searchParams.selectedConversation.participants.map(
+									(participant) => (
+										<Badge
+											key={participant.id}
+											variant='outline'
+											className='flex items-center gap-1 py-1 px-3'
+										>
+											<Avatar className='h-5 w-5 mr-1'>
+												<AvatarFallback>
+													{participant.name
+														.split(" ")
+														.map((n) => n[0])
+														.join("")}
+												</AvatarFallback>
+											</Avatar>
+											<span className='text-xs'>{participant.name}</span>
+										</Badge>
+									)
+								)}
 							</div>
 						</div>
 					)}

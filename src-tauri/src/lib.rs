@@ -697,6 +697,7 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     let mut start_timestamp: Option<i64> = None;
     let mut end_timestamp: Option<i64> = None;
     let mut sender_filters: Vec<String> = Vec::new();
+    let mut conversation_id: Option<String> = None;
     
     // Split the query by spaces, but respect quoted strings
     let mut current_part = String::new();
@@ -748,6 +749,17 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                             println!("Parsed sender filter: {}", clean_sender);
                             sender_filters.push(clean_sender);
                         }
+                    } else if part.starts_with("CONVERSATION:") {
+                        // Extract the conversation ID between quotes if present
+                        if let Some(conv_id) = part.strip_prefix("CONVERSATION:") {
+                            let clean_id = if conv_id.starts_with('"') && conv_id.ends_with('"') {
+                                conv_id[1..conv_id.len()-1].to_string()
+                            } else {
+                                conv_id.to_string()
+                            };
+                            println!("Parsed conversation filter: {}", clean_id);
+                            conversation_id = Some(clean_id);
+                        }
                     } else if !in_parentheses { // Only add to text query if not in parentheses
                         // Add to regular text query
                         if !text_query.is_empty() {
@@ -787,6 +799,16 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                 };
                 println!("Parsed sender filter: {}", clean_sender);
                 sender_filters.push(clean_sender);
+            }
+        } else if part.starts_with("CONVERSATION:") {
+            if let Some(conv_id) = part.strip_prefix("CONVERSATION:") {
+                let clean_id = if conv_id.starts_with('"') && conv_id.ends_with('"') {
+                    conv_id[1..conv_id.len()-1].to_string()
+                } else {
+                    conv_id.to_string()
+                };
+                println!("Parsed conversation filter: {}", clean_id);
+                conversation_id = Some(clean_id);
             }
         } else if !part.starts_with("AFTER:") && !part.starts_with("BEFORE:") && !in_parentheses {
             if !text_query.is_empty() {
@@ -891,6 +913,21 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
         }
         
         sql.push_str(")");
+    }
+    
+    // Add conversation filter if provided
+    if let Some(conv_id) = conversation_id {
+        sql.push_str(" AND cmj.chat_id = ?");
+        // Convert string to i64 for SQLite
+        if let Ok(chat_id) = conv_id.parse::<i64>() {
+            params.push(Box::new(chat_id));
+        } else {
+            println!("Invalid conversation ID format: {}", conv_id);
+            return Ok(SearchResult {
+                messages: Vec::new(),
+                total_count: 0,
+            });
+        }
     }
     
     // Add ordering and limit
