@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { format } from "date-fns"
+import { debounce } from "lodash"
 import { Calendar as CalendarIcon, ChevronDown, Search, X } from "lucide-react"
-import React, { useState } from "react"
+import React, { useCallback, useMemo, useState } from "react"
 
 type ContactInfo = {
 	id: string
@@ -57,8 +58,12 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 		endDate: undefined,
 		selectedContact: null,
 	})
-	// Collect all contacts from the contactMap
-	const contacts = Object.values(contactMap.byId)
+	// Collect all contacts from the contactMap and sort them alphabetically by name
+	const contacts = useMemo(() => {
+		return Object.values(contactMap.byId)
+			.filter((contact) => contact.name.trim() !== "") // Filter out empty names
+			.sort((a, b) => a.name.localeCompare(b.name))
+	}, [contactMap])
 
 	const handleSearch = () => {
 		onSearch(searchParams)
@@ -71,10 +76,14 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 	}
 
 	const clearSelectedContact = () => {
-		setSearchParams((prev) => ({
-			...prev,
-			selectedContact: null,
-		}))
+		setSearchParams((prev) => {
+			const newParams = {
+				...prev,
+				selectedContact: null,
+			}
+			onSearch(newParams)
+			return newParams
+		})
 	}
 
 	const handleDateSelect = (type: "start" | "end", date: Date | undefined) => {
@@ -83,12 +92,44 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 				...prev,
 				[type === "start" ? "startDate" : "endDate"]: date,
 			}
-			// Trigger search automatically if we have a date range
-			if (newParams.startDate || newParams.endDate) {
-				onSearch(newParams)
-			}
+			onSearch(newParams)
 			return newParams
 		})
+	}
+
+	// Add debounced search function for text input
+	const debouncedSearch = useCallback(
+		debounce((params: SearchParams) => {
+			onSearch(params)
+		}, 300),
+		[onSearch]
+	)
+
+	const handleTextSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const newValue = e.target.value
+		setSearchParams((prev) => {
+			const newParams = {
+				...prev,
+				query: newValue,
+			}
+			debouncedSearch(newParams)
+			return newParams
+		})
+	}
+
+	// Helper function to get the search value for a contact
+	const getContactSearchValue = (contact: ContactInfo): string => {
+		switch (contact.type) {
+			case "phone":
+				// For phone contacts, use the normalized phone number
+				return contact.value || contact.name
+			case "email":
+				// For email contacts, use the email address
+				return contact.value?.toLowerCase() || contact.name
+			default:
+				// For regular contacts, use the name
+				return contact.name
+		}
 	}
 
 	return (
@@ -203,10 +244,14 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 													<CommandItem
 														key={contact.id}
 														onSelect={() => {
-															setSearchParams((prev) => ({
-																...prev,
-																selectedContact: contact,
-															}))
+															setSearchParams((prev) => {
+																const newParams = {
+																	...prev,
+																	selectedContact: contact,
+																}
+																onSearch(newParams)
+																return newParams
+															})
 														}}
 														className='flex items-center gap-2 cursor-pointer'
 													>
@@ -238,30 +283,49 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 
 					{/* Selected Contact Display */}
 					{searchParams.selectedContact && (
-						<div className='flex flex-wrap gap-2'>
-							<Badge
-								variant='secondary'
-								className='flex items-center gap-1 py-1 px-3'
-							>
-								<Avatar className='h-5 w-5 mr-1'>
-									<AvatarFallback>
-										{searchParams.selectedContact.name
-											.split(" ")
-											.map((n) => n[0])
-											.join("")}
-									</AvatarFallback>
-								</Avatar>
-								<span>{searchParams.selectedContact.name}</span>
+						<div className='flex flex-col gap-2 bg-muted/50 rounded-lg p-3'>
+							<div className='flex items-center justify-between'>
+								<div className='text-sm font-medium'>
+									Selected Contact Details:
+								</div>
 								<Button
 									variant='ghost'
 									size='icon'
-									className='h-4 w-4 ml-1 p-0'
+									className='h-6 w-6 p-0'
 									onClick={clearSelectedContact}
 								>
-									<X className='h-3 w-3' />
+									<X className='h-4 w-4' />
 									<span className='sr-only'>Remove</span>
 								</Button>
-							</Badge>
+							</div>
+							<div className='flex flex-wrap gap-2'>
+								{/* Find all related contacts with the same name */}
+								{Object.values(contactMap.byId)
+									.filter((c) => c.name === searchParams.selectedContact?.name)
+									.map((contact) => (
+										<Badge
+											key={contact.id}
+											variant='secondary'
+											className='flex items-center gap-1 py-1 px-3'
+										>
+											<Avatar className='h-5 w-5 mr-1'>
+												<AvatarFallback>
+													{contact.name
+														.split(" ")
+														.map((n) => n[0])
+														.join("")}
+												</AvatarFallback>
+											</Avatar>
+											<div className='flex flex-col text-xs'>
+												<span className='font-medium'>{contact.name}</span>
+												<span className='text-muted-foreground'>
+													ID: {contact.id} • Type: {contact.type}
+													{contact.value && ` • ${contact.value}`}
+												</span>
+											</div>
+										</Badge>
+									))}
+							</div>
 						</div>
 					)}
 
@@ -277,12 +341,7 @@ export function AdvancedSearch({ onSearch, contactMap }: AdvancedSearchProps) {
 								placeholder='Search message content...'
 								className='pl-10'
 								value={searchParams.query}
-								onChange={(e) =>
-									setSearchParams((prev) => ({
-										...prev,
-										query: e.target.value,
-									}))
-								}
+								onChange={handleTextSearch}
 								onKeyDown={handleKeyDown}
 							/>
 						</div>

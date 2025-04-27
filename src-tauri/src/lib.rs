@@ -678,6 +678,16 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
     Ok(messages)
 }
 
+// Add this before the search_messages function
+#[derive(Debug)]
+struct SqlParam(String);
+
+impl rusqlite::ToSql for SqlParam {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
 #[tauri::command]
 async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     println!("Searching for messages containing: {}", query);
@@ -686,38 +696,108 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     let mut text_query = String::new();
     let mut start_timestamp: Option<i64> = None;
     let mut end_timestamp: Option<i64> = None;
-    let mut sender_filter: Option<String> = None;
+    let mut sender_filters: Vec<String> = Vec::new();
     
-    // Split the query by spaces and parse special commands
-    let parts: Vec<&str> = query.split(' ').collect();
-    for part in parts {
-        if part.starts_with("AFTER:") {
-            if let Some(timestamp_str) = part.strip_prefix("AFTER:") {
-                if let Ok(timestamp) = timestamp_str.parse::<i64>() {
-                    start_timestamp = Some(timestamp);
-                    println!("Parsed start timestamp: {}", timestamp);
+    // Split the query by spaces, but respect quoted strings
+    let mut current_part = String::new();
+    let mut in_quotes = false;
+    let mut chars = query.chars().peekable();
+    let mut in_parentheses = false;
+    
+    while let Some(c) = chars.next() {
+        match c {
+            '(' => {
+                in_parentheses = true;
+                // Don't add parentheses to the text query
+                continue;
+            }
+            ')' => {
+                in_parentheses = false;
+                // Don't add parentheses to the text query
+                continue;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                current_part.push(c);
+            }
+            ' ' if !in_quotes => {
+                if !current_part.is_empty() {
+                    let part = current_part.clone();
+                    if part.starts_with("AFTER:") {
+                        if let Some(timestamp_str) = part.strip_prefix("AFTER:") {
+                            if let Ok(timestamp) = timestamp_str.parse::<i64>() {
+                                start_timestamp = Some(timestamp);
+                                println!("Parsed start timestamp: {}", timestamp);
+                            }
+                        }
+                    } else if part.starts_with("BEFORE:") {
+                        if let Some(timestamp_str) = part.strip_prefix("BEFORE:") {
+                            if let Ok(timestamp) = timestamp_str.parse::<i64>() {
+                                end_timestamp = Some(timestamp);
+                                println!("Parsed end timestamp: {}", timestamp);
+                            }
+                        }
+                    } else if part.starts_with("FROM:") {
+                        // Extract the value between quotes if present
+                        if let Some(sender) = part.strip_prefix("FROM:") {
+                            let clean_sender = if sender.starts_with('"') && sender.ends_with('"') {
+                                sender[1..sender.len()-1].to_string()
+                            } else {
+                                sender.to_string()
+                            };
+                            println!("Parsed sender filter: {}", clean_sender);
+                            sender_filters.push(clean_sender);
+                        }
+                    } else if !in_parentheses { // Only add to text query if not in parentheses
+                        // Add to regular text query
+                        if !text_query.is_empty() {
+                            text_query.push(' ');
+                        }
+                        text_query.push_str(&part);
+                    }
+                }
+                current_part.clear();
+            }
+            '\\' if in_quotes => {
+                if let Some(next_char) = chars.next() {
+                    current_part.push(next_char);
                 }
             }
-        } else if part.starts_with("BEFORE:") {
-            if let Some(timestamp_str) = part.strip_prefix("BEFORE:") {
-                if let Ok(timestamp) = timestamp_str.parse::<i64>() {
-                    end_timestamp = Some(timestamp);
-                    println!("Parsed end timestamp: {}", timestamp);
-                }
+            'O' if current_part.ends_with(" OR") && in_parentheses => {
+                // Skip "OR" when in parentheses
+                current_part.clear();
             }
-        } else if part.starts_with("FROM:") {
+            'R' if current_part.ends_with(" O") && in_parentheses => {
+                // Skip "OR" when in parentheses
+                current_part.clear();
+            }
+            _ => current_part.push(c),
+        }
+    }
+    
+    // Process the last part if any
+    if !current_part.is_empty() {
+        let part = current_part;
+        if part.starts_with("FROM:") {
             if let Some(sender) = part.strip_prefix("FROM:") {
-                sender_filter = Some(sender.to_string());
-                println!("Parsed sender filter: {}", sender);
+                let clean_sender = if sender.starts_with('"') && sender.ends_with('"') {
+                    sender[1..sender.len()-1].to_string()
+                } else {
+                    sender.to_string()
+                };
+                println!("Parsed sender filter: {}", clean_sender);
+                sender_filters.push(clean_sender);
             }
-        } else {
-            // Add to regular text query
+        } else if !part.starts_with("AFTER:") && !part.starts_with("BEFORE:") && !in_parentheses {
             if !text_query.is_empty() {
                 text_query.push(' ');
             }
-            text_query.push_str(part);
+            text_query.push_str(&part);
         }
     }
+    
+    println!("Parsed text query: {:?}", text_query);
+    println!("Parsed sender filters: {:?}", sender_filters);
     
     // If text query is empty after parsing special commands, search for all messages
     if text_query.is_empty() {
@@ -757,55 +837,57 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     
     // Add date filters if provided
     if let Some(start_time) = start_timestamp {
-        // Convert Unix timestamp to Apple timestamp:
-        // 1. Subtract the Apple epoch offset (978307200 seconds since Unix epoch)
-        // 2. Convert to nanoseconds
         let apple_start = (start_time - 978307200) * 1_000_000_000;
         sql.push_str(" AND m.date >= ?");
         params.push(Box::new(apple_start));
     }
     
     if let Some(end_time) = end_timestamp {
-        // Convert Unix timestamp to Apple timestamp:
-        // 1. Subtract the Apple epoch offset (978307200 seconds since Unix epoch)
-        // 2. Convert to nanoseconds
         let apple_end = (end_time - 978307200) * 1_000_000_000;
         sql.push_str(" AND m.date <= ?");
         params.push(Box::new(apple_end));
     }
     
-    // Add sender filter if provided
-    if let Some(sender) = &sender_filter {
+    // Add sender filters if provided
+    if !sender_filters.is_empty() {
         sql.push_str(" AND (");
+        let mut first = true;
         
-        // Check if sender might be a phone number
-        let is_numeric = sender.chars().all(|c| c.is_digit(10) || c == '+' || c == '-' || c == '(' || c == ')' || c == ' ');
-        
-        if is_numeric {
-            // For phone numbers, search with wildcard to handle different formats
-            let numeric_only: String = sender.chars().filter(|c| c.is_digit(10)).collect();
-            if !numeric_only.is_empty() {
-                sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
-                let pattern = format!("%{}%", numeric_only);
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern));
+        for sender in sender_filters {
+            if !first {
+                sql.push_str(" OR ");
+            }
+            first = false;
+            
+            // Check if sender might be a phone number
+            let is_numeric = sender.chars().all(|c| c.is_digit(10) || c == '+' || c == '-' || c == '(' || c == ')' || c == ' ');
+            
+            if is_numeric {
+                // For phone numbers, search with wildcard to handle different formats
+                let numeric_only: String = sender.chars().filter(|c| c.is_digit(10)).collect();
+                if !numeric_only.is_empty() {
+                    sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                    let pattern = format!("%{}%", numeric_only);
+                    params.push(Box::new(pattern.clone()));
+                    params.push(Box::new(pattern));
+                } else {
+                    sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                    let pattern = format!("%{}%", sender);
+                    params.push(Box::new(pattern.clone()));
+                    params.push(Box::new(pattern));
+                }
+            } else if sender.contains('@') {
+                // For emails, do exact match (case insensitive)
+                sql.push_str("LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?)");
+                params.push(Box::new(sender.clone()));
+                params.push(Box::new(sender));
             } else {
+                // For names or other identifiers, use LIKE
                 sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
                 let pattern = format!("%{}%", sender);
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
             }
-        } else if sender.contains('@') {
-            // For emails, do exact match (case insensitive)
-            sql.push_str("LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?)");
-            params.push(Box::new(sender.clone()));
-            params.push(Box::new(sender.clone()));
-        } else {
-            // For names or other identifiers, use LIKE
-            sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
-            let pattern = format!("%{}%", sender);
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern));
         }
         
         sql.push_str(")");
@@ -814,7 +896,33 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     // Add ordering and limit
     sql.push_str(" ORDER BY m.date DESC LIMIT 500");
     
-    println!("Executing advanced search query: {}", sql);
+    // Print the complete SQL query with parameter values for debugging
+    println!("Executing SQL query:");
+    println!("{}", sql);
+    println!("\nQuery parameters:");
+    for param in &params {
+        match param.to_sql() {
+            Ok(rusqlite::types::ToSqlOutput::Owned(value)) => {
+                match value {
+                    rusqlite::types::Value::Text(s) => println!("  Value: '{}'", s),
+                    rusqlite::types::Value::Integer(i) => println!("  Value: {}", i),
+                    rusqlite::types::Value::Real(f) => println!("  Value: {}", f),
+                    rusqlite::types::Value::Blob(b) => println!("  Value: <blob of length {}>", b.len()),
+                    rusqlite::types::Value::Null => println!("  Value: NULL"),
+                }
+            },
+            Ok(rusqlite::types::ToSqlOutput::Borrowed(value)) => {
+                match value {
+                    rusqlite::types::ValueRef::Text(s) => println!("  Value: '{}'", String::from_utf8_lossy(s)),
+                    rusqlite::types::ValueRef::Integer(i) => println!("  Value: {}", i),
+                    rusqlite::types::ValueRef::Real(f) => println!("  Value: {}", f),
+                    rusqlite::types::ValueRef::Blob(b) => println!("  Value: <blob of length {}>", b.len()),
+                    rusqlite::types::ValueRef::Null => println!("  Value: NULL"),
+                }
+            },
+            _ => println!("  Value: <unknown>"),
+        }
+    }
     
     let mut stmt = conn.prepare(&sql)?;
     
@@ -862,7 +970,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             },
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
-        
         
         Ok(Message {
             id: message_id,

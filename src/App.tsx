@@ -108,7 +108,7 @@ function App() {
 					if (match && match[1] && match[3]) {
 						const id = match[1]
 						const name = match[2].trim()
-						const email = match[3].trim().toLowerCase()
+						const email = match[3].trim()
 
 						if (email) {
 							const contactInfo = {
@@ -131,25 +131,16 @@ function App() {
 						const name = match[2].trim()
 						const phone = match[3].trim()
 
-						// Normalize phone number - remove spaces, dashes, etc
-						const normalizedPhone = phone.replace(/\D/g, "")
-
-						if (normalizedPhone) {
+						if (phone) {
 							const contactInfo = {
 								id,
 								name: name !== "<No Name>" ? name : phone,
 								type: "phone" as const,
-								value: normalizedPhone,
+								value: phone,
 							}
 
 							newContactMap.byId[id] = contactInfo
-							newContactMap.byPhone[normalizedPhone] = contactInfo
-
-							// Also store short version of phone (last 10 digits) for matching
-							if (normalizedPhone.length >= 10) {
-								const shortPhone = normalizedPhone.slice(-10)
-								newContactMap.byPhone[shortPhone] = contactInfo
-							}
+							newContactMap.byPhone[phone] = contactInfo
 						}
 					}
 				}
@@ -168,25 +159,37 @@ function App() {
 	): string | undefined => {
 		if (!senderId) return undefined
 
-		// Try to match with phone number
-		const normalizedSender = senderId.replace(/\D/g, "")
-		if (normalizedSender && contactMap.byPhone[normalizedSender]) {
-			return contactMap.byPhone[normalizedSender].name
+		// Try direct match first (this will catch emails and exact phone matches)
+		if (contactMap.byPhone[senderId]) {
+			return contactMap.byPhone[senderId].name
+		}
+		if (contactMap.byEmail[senderId]) {
+			return contactMap.byEmail[senderId].name
 		}
 
-		// If it's a long phone number, try matching last 10 digits
-		if (normalizedSender.length > 10) {
-			const shortPhone = normalizedSender.slice(-10)
-			if (contactMap.byPhone[shortPhone]) {
-				return contactMap.byPhone[shortPhone].name
-			}
-		}
-
-		// Try to match with email
+		// Try to match with email (case insensitive)
 		if (senderId.includes("@")) {
 			const lowerEmail = senderId.toLowerCase()
 			if (contactMap.byEmail[lowerEmail]) {
 				return contactMap.byEmail[lowerEmail].name
+			}
+		}
+
+		// Try to match with phone number by checking all formats
+		const phoneContacts = Object.entries(contactMap.byPhone)
+		for (const [storedNumber, contact] of phoneContacts) {
+			// Remove all non-digits from both numbers for comparison
+			const normalizedStored = storedNumber.replace(/\D/g, "")
+			const normalizedSender = senderId.replace(/\D/g, "")
+
+			// Match if either the full numbers match or the last 10 digits match
+			if (
+				normalizedStored === normalizedSender ||
+				(normalizedStored.length >= 10 &&
+					normalizedSender.length >= 10 &&
+					normalizedStored.slice(-10) === normalizedSender.slice(-10))
+			) {
+				return contact.name
 			}
 		}
 
@@ -482,12 +485,33 @@ function App() {
 
 			// Add contact filter if provided
 			if (params.selectedContact) {
-				const contactValue =
-					params.selectedContact.type === "phone" ||
-					params.selectedContact.type === "email"
-						? params.selectedContact.value
-						: params.selectedContact.name
-				queryParts.push(`FROM:${contactValue}`)
+				const contact = params.selectedContact
+				const searchValues: string[] = []
+
+				// Always include the contact's name
+				searchValues.push(contact.name)
+
+				// Find all associated contacts with the same name
+				const relatedContacts = Object.values(contactMap.byId).filter(
+					(c) => c.name === contact.name
+				)
+
+				// Collect all unique identifiers with original format
+				relatedContacts.forEach((relatedContact) => {
+					if (relatedContact.value) {
+						searchValues.push(relatedContact.value)
+					}
+				})
+
+				// Remove duplicates and create OR conditions for each value
+				const uniqueSearchValues = [...new Set(searchValues)]
+				// Create FROM conditions, properly escaping quotes in values
+				const fromConditions = uniqueSearchValues.map((value) => {
+					// Escape any quotes in the value and wrap in quotes
+					const escapedValue = value.replace(/"/g, '\\"')
+					return `FROM:"${escapedValue}"`
+				})
+				queryParts.push(`(${fromConditions.join(" OR ")})`)
 			}
 
 			// If no search parameters are provided, return early with an empty result
