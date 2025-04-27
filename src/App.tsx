@@ -1,3 +1,4 @@
+import { AdvancedSearch, SearchParams } from "@/components/ui/advanced-search"
 import { invoke } from "@tauri-apps/api/core"
 import { useEffect, useMemo, useRef, useState } from "react"
 
@@ -51,6 +52,12 @@ function App() {
 	const [loading, setLoading] = useState<boolean>(true)
 	const [error, setError] = useState<string | null>(null)
 	const [searchQuery, setSearchQuery] = useState<string>("")
+	const [searchParams, setSearchParams] = useState<SearchParams>({
+		query: "",
+		startDate: undefined,
+		endDate: undefined,
+		selectedContact: null,
+	})
 	const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
 	const [isSearching, setIsSearching] = useState<boolean>(false)
 	const [contactsData, setContactsData] = useState<string | null>(null)
@@ -286,98 +293,58 @@ function App() {
 
 	// Helper function to preload messages for each conversation
 	const preloadConversationMessages = async (conversations: Conversation[]) => {
-		try {
-			const contacts = await invoke<Contact[]>("read_contacts")
+		// Process conversations in small batches to avoid overwhelming the system
+		const batchSize = 5
+		const batches = Math.ceil(conversations.length / batchSize)
 
-			// Process contacts into a map for easier lookup
-			const newContactMap: ContactMap = {}
-			if (contacts && Array.isArray(contacts)) {
-				contacts.forEach((contact) => {
-					const phoneNumbers = contact.phoneNumbers || []
-					phoneNumbers.forEach((phoneNumber) => {
-						if (typeof phoneNumber.value === "string") {
-							const normalizedNumber = normalizePhoneNumber(phoneNumber.value)
-							newContactMap[normalizedNumber] = contact.name
-						}
-					})
+		for (let i = 0; i < batches; i++) {
+			const batchStart = i * batchSize
+			const batchEnd = Math.min(batchStart + batchSize, conversations.length)
+			const batch = conversations.slice(batchStart, batchEnd)
 
-					const emails = contact.emails || []
-					emails.forEach((email) => {
-						if (typeof email.value === "string") {
-							newContactMap[email.value.toLowerCase()] = contact.name
-						}
-					})
-				})
-			}
+			// Process each conversation in parallel within the batch
+			await Promise.all(
+				batch.map(async (conversation) => {
+					try {
+						// Fetch just enough messages to determine participants
+						const fetchedMessages = await invoke("get_messages", {
+							conversationId: conversation.id,
+						})
+						const messagesArray = fetchedMessages as Message[]
 
-			setContactMap(newContactMap)
-		} catch (error) {
-			console.error("Failed to load contacts:", error)
-			setError(
-				"Failed to load contacts. You may need to grant access to the Contacts database."
-			)
-		}
+						// Update the messages by conversation map
+						setMessagesByConversation((prev) => ({
+							...prev,
+							[conversation.id]: messagesArray,
+						}))
 
-		try {
-			// Process conversations in small batches to avoid overwhelming the system
-			const batchSize = 5
-			const batches = Math.ceil(conversations.length / batchSize)
+						// Process messages to get proper names
+						const messagesWithNames = applyContactNamesToMessages(messagesArray)
+						const title = generateConversationTitle(
+							conversation,
+							messagesWithNames
+						)
 
-			for (let i = 0; i < batches; i++) {
-				const batchStart = i * batchSize
-				const batchEnd = Math.min(batchStart + batchSize, conversations.length)
-				const batch = conversations.slice(batchStart, batchEnd)
-
-				// Process each conversation in parallel within the batch
-				await Promise.all(
-					batch.map(async (conversation) => {
-						try {
-							// Fetch just enough messages to determine participants
-							const fetchedMessages = await invoke("get_messages", {
-								conversationId: conversation.id,
-							})
-							const messagesArray = fetchedMessages as Message[]
-
-							// Update the messages by conversation map
-							setMessagesByConversation((prev) => ({
+						// Update the title if we got something meaningful
+						if (title !== "Conversation") {
+							setConversationTitles((prev) => ({
 								...prev,
-								[conversation.id]: messagesArray,
+								[conversation.id]: title,
 							}))
-
-							// Process messages to get proper names
-							const messagesWithNames =
-								applyContactNamesToMessages(messagesArray)
-							const title = generateConversationTitle(
-								conversation,
-								messagesWithNames
-							)
-
-							// Update the title if we got something meaningful
-							if (title !== "Conversation") {
-								setConversationTitles((prev) => ({
-									...prev,
-									[conversation.id]: title,
-								}))
-							}
-						} catch (error) {
-							console.error(
-								`Failed to preload messages for conversation ${conversation.id}:`,
-								error
-							)
 						}
-					})
-				)
-
-				// Small delay between batches to let the UI breathe
-				if (i < batches - 1) {
-					await new Promise((resolve) => setTimeout(resolve, 100))
-				}
-			}
-		} catch (error) {
-			console.error("Failed to load conversations:", error)
-			setError(
-				"Failed to load conversations. You may need to grant access to the Messages database."
+					} catch (error) {
+						console.error(
+							`Failed to preload messages for conversation ${conversation.id}:`,
+							error
+						)
+					}
+				})
 			)
+
+			// Small delay between batches to let the UI breathe
+			if (i < batches - 1) {
+				await new Promise((resolve) => setTimeout(resolve, 100))
+			}
 		}
 	}
 
@@ -389,21 +356,29 @@ function App() {
 				setLoading(true)
 				setError(null)
 				// This will be implemented in Rust to safely access the SQLite DB
-				const fetchedConversations = await invoke<Conversation[]>(
-					"get_conversations"
-				)
+				const fetchedConversations = await invoke("get_conversations")
 				console.log("Fetched conversations:", fetchedConversations)
-				setConversations(fetchedConversations)
+				setConversations(fetchedConversations as Conversation[])
 
-				// Initialize conversation titles with current names
-				const initialTitles: { [key: string]: string } = {}
-				fetchedConversations.forEach((conv) => {
-					initialTitles[conv.id] = conv.name || "Chat"
-				})
+				// Initialize the conversation titles with what we have
+				const initialTitles: Record<string, string> = {}
+				for (const conv of fetchedConversations as Conversation[]) {
+					// Use the conversation name if available, or try to extract names from participants
+					if (conv.name) {
+						initialTitles[conv.id] = conv.name
+					} else if (conv.last_message) {
+						// Try to extract a name from the last sender
+						initialTitles[conv.id] = "Chat" // Will be updated shortly
+					} else {
+						initialTitles[conv.id] = "Chat" // Will be updated shortly
+					}
+				}
 				setConversationTitles(initialTitles)
 
-				// Preload messages for proper conversation titles
-				void preloadConversationMessages(fetchedConversations)
+				// Preload messages for each conversation
+				await preloadConversationMessages(
+					fetchedConversations as Conversation[]
+				)
 			} catch (error) {
 				console.error("Failed to load conversations:", error)
 				setError(
@@ -414,8 +389,31 @@ function App() {
 			}
 		}
 
+		// Load contacts automatically when the app starts
+		const loadContacts = async () => {
+			try {
+				setIsLoadingContacts(true)
+				const contacts = await invoke("read_contacts")
+				console.log("Fetched contacts:", contacts)
+				setContactsData(contacts as string)
+			} catch (error) {
+				console.error("Failed to load contacts:", error)
+				setContactsData("Error loading contacts: " + String(error))
+			} finally {
+				setIsLoadingContacts(false)
+			}
+		}
+
 		// Load both conversations and contacts
 		loadConversations()
+		loadContacts()
+
+		// Debug: Log if styles are applied
+		console.log(
+			"Style test - bg-blue-500:",
+			getComputedStyle(document.querySelector(".bg-blue-500") || document.body)
+				.backgroundColor
+		)
 	}, [])
 
 	const handleSelectConversation = async (conversationId: string) => {
@@ -430,24 +428,23 @@ function App() {
 				setMessages(messagesByConversation[conversationId])
 			} else {
 				// Fetch messages from the backend
-				const fetchedMessages = await invoke<Message[]>("get_messages", {
-					conversationId,
-				})
+				const fetchedMessages = await invoke("get_messages", { conversationId })
 				console.log("Fetched messages:", fetchedMessages)
 
 				// Store and set the messages
-				setMessages(fetchedMessages)
+				const messagesArray = fetchedMessages as Message[]
+				setMessages(messagesArray)
 
 				// Update the messages by conversation map
 				setMessagesByConversation((prev) => ({
 					...prev,
-					[conversationId]: fetchedMessages,
+					[conversationId]: messagesArray,
 				}))
 
 				// Process the messages to generate a better title if needed
 				const conversation = conversations.find((c) => c.id === conversationId)
 				if (conversation) {
-					const messagesWithNames = applyContactNamesToMessages(fetchedMessages)
+					const messagesWithNames = applyContactNamesToMessages(messagesArray)
 					const title = generateConversationTitle(
 						conversation,
 						messagesWithNames
@@ -469,16 +466,51 @@ function App() {
 		}
 	}
 
-	const handleSearch = async () => {
-		if (!searchQuery.trim()) return
+	const handleSearch = async (params: SearchParams) => {
+		if (!params.query.trim()) return
 
 		setIsSearching(true)
+		setSearchParams(params)
+
 		try {
-			const results = await invoke<SearchResult>("search_messages", {
-				query: searchQuery,
-			})
+			// Build a more advanced search query with additional filters
+			let query = params.query
+
+			// Add date filters if provided
+			if (params.startDate || params.endDate) {
+				// Date filters will be handled on the Rust side
+				// Using a placeholder format that will be parsed
+				if (params.startDate) {
+					const startTimestamp = Math.floor(params.startDate.getTime() / 1000)
+					query += ` AFTER:${startTimestamp}`
+				}
+				if (params.endDate) {
+					const endTimestamp = Math.floor(params.endDate.getTime() / 1000)
+					query += ` BEFORE:${endTimestamp}`
+				}
+			}
+
+			// Add contact filter if provided
+			if (params.selectedContact) {
+				if (
+					params.selectedContact.type === "phone" &&
+					params.selectedContact.value
+				) {
+					query += ` FROM:${params.selectedContact.value}`
+				} else if (
+					params.selectedContact.type === "email" &&
+					params.selectedContact.value
+				) {
+					query += ` FROM:${params.selectedContact.value}`
+				} else {
+					query += ` FROM:${params.selectedContact.name}`
+				}
+			}
+
+			console.log("Advanced search query:", query)
+			const results = await invoke("search_messages", { query })
 			console.log("Search results:", results)
-			setSearchResults(results.messages)
+			setSearchResults(results as SearchResult)
 			setSelectedConversation(null)
 		} catch (error) {
 			console.error("Search failed:", error)
@@ -489,7 +521,7 @@ function App() {
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter") {
-			handleSearch()
+			handleSearch(searchParams)
 		}
 	}
 
@@ -503,7 +535,7 @@ function App() {
 		setIsLoadingContacts(true)
 		setContactsData(null)
 		try {
-			const contacts = await invoke<Contact[]>("read_contacts")
+			const contacts = await invoke("read_contacts")
 			console.log("Fetched contacts:", contacts)
 			setContactsData(contacts as string)
 		} catch (error) {
@@ -634,29 +666,14 @@ function App() {
 	return (
 		<div className='flex flex-col h-screen bg-gray-100'>
 			{/* Search Bar with Contacts Toggle Button */}
-			<div className='p-4 bg-white border-b border-gray-200 flex items-center'>
-				<input
-					type='text'
-					placeholder='Search messages...'
-					className='flex-1 p-2 border border-gray-300 rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500'
-					value={searchQuery}
-					onChange={(e) => setSearchQuery(e.target.value)}
-					onKeyDown={handleKeyDown}
-				/>
-				<button
-					className='bg-blue-500 text-white px-4 py-2 rounded-r hover:bg-blue-600 focus:outline-none'
-					onClick={handleSearch}
-					disabled={isSearching}
-				>
-					{isSearching ? "Searching..." : "Search"}
-				</button>
-				<button
-					className='ml-2 bg-indigo-500 text-white px-3 py-2 rounded hover:bg-indigo-600 focus:outline-none text-sm'
-					onClick={handleToggleContacts}
-					aria-label='Toggle contacts visibility'
-				>
-					{showContacts ? "Hide Contacts" : "Show Contacts"}
-				</button>
+			<div className='p-4 bg-white border-b border-gray-200'>
+				<div className='flex flex-col space-y-2'>
+					<AdvancedSearch
+						onSearch={handleSearch}
+						isSearching={isSearching}
+						contactMap={contactMap}
+					/>
+				</div>
 			</div>
 
 			{/* Contacts Data Display */}

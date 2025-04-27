@@ -85,14 +85,12 @@ fn get_imessage_db_path() -> Result<PathBuf, AppError> {
     let home = dirs::home_dir().ok_or(AppError::OtherError("Home directory not found".to_string()))?;
     let db_path = home.join("Library/Messages/chat.db");
     
-    println!("Looking for iMessage database at: {:?}", db_path);
     
     if !db_path.exists() {
         println!("Database file not found at {:?}", db_path);
         return Err(AppError::DatabaseNotFound);
     }
     
-    println!("Database file exists, checking permissions...");
     
     // Check if we can read the database
     // If not, we'll need to copy it to a temporary location with proper permissions
@@ -101,15 +99,10 @@ fn get_imessage_db_path() -> Result<PathBuf, AppError> {
             println!("Successfully opened database directly");
             Ok(db_path)
         },
-        Err(e) => {
-            println!("Direct database access failed: {:?}", e);
-            println!("Attempting to create a temporary copy...");
-            
+        Err(_e) => {
             // Create a temporary copy we can read
             let temp_dir = std::env::temp_dir();
             let temp_db_path = temp_dir.join("imessage_temp.db");
-            
-            println!("Copying database to: {:?}", temp_db_path);
             
             // Copy the file
             match fs::copy(&db_path, &temp_db_path) {
@@ -243,16 +236,26 @@ fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
 // Read contacts from AddressBook database
 #[tauri::command]
 async fn read_contacts() -> Result<String, AppError> {
+    println!("Attempting to read contacts from AddressBook...");
+    
     let db_path = match get_addressbook_db_path() {
-        Ok(path) => path,
+        Ok(path) => {
+            println!("Found AddressBook database at: {:?}", path);
+            path
+        },
         Err(e) => {
+            println!("Error finding AddressBook database: {:?}", e);
             return Ok(format!("Error finding AddressBook database: {}\n\nPlease make sure AddressBook-v22.db exists in the project root directory.", e));
         }
     };
     
     let conn = match Connection::open(&db_path) {
-        Ok(conn) => conn,
+        Ok(conn) => {
+            println!("Successfully opened AddressBook database connection");
+            conn
+        },
         Err(e) => {
+            println!("Error connecting to AddressBook database: {:?}", e);
             return Ok(format!("Error connecting to AddressBook database: {}\n\nThe file may be corrupted or not have the expected structure.", e));
         }
     };
@@ -280,6 +283,7 @@ async fn read_contacts() -> Result<String, AppError> {
         LIMIT 1000
     "#;
     
+    println!("Querying contact records...");
     {
         match conn.prepare(basic_query) {
             Ok(mut stmt) => {
@@ -309,6 +313,7 @@ async fn read_contacts() -> Result<String, AppError> {
                         format!("Contact [ID: {}]: {}", id, full_name)
                     };
                     
+                    println!("Found contact: {}", contact_info);
                     contact_count += 1;
                     
                     Ok(contact_info)
@@ -319,14 +324,14 @@ async fn read_contacts() -> Result<String, AppError> {
                         for row in rows {
                             match row {
                                 Ok(contact) => contacts.push(contact),
-                                Err(_) => {}
+                                Err(e) => println!("Error processing contact: {:?}", e),
                             }
                         }
                     },
-                    Err(_) => {}
+                    Err(e) => println!("Error querying contacts: {:?}", e),
                 }
             },
-            Err(_) => {}
+            Err(e) => println!("Error preparing contact query: {:?}", e),
         }
     }
     
@@ -345,6 +350,7 @@ async fn read_contacts() -> Result<String, AppError> {
         LIMIT 1000
     "#;
     
+    println!("Querying email addresses with contact names...");
     {
         match conn.prepare(email_query) {
             Ok(mut stmt) => {
@@ -360,6 +366,7 @@ async fn read_contacts() -> Result<String, AppError> {
                         email
                     );
                     
+                    println!("Found email with contact: {}", contact_info);
                     email_count += 1;
                     
                     Ok(contact_info)
@@ -370,14 +377,14 @@ async fn read_contacts() -> Result<String, AppError> {
                         for row in rows {
                             match row {
                                 Ok(contact) => contacts.push(contact),
-                                Err(_) => {}
+                                Err(e) => println!("Error processing email with contact: {:?}", e),
                             }
                         }
                     },
-                    Err(_) => {}
+                    Err(e) => println!("Error querying emails with contacts: {:?}", e),
                 }
             },
-            Err(_) => {}
+            Err(e) => println!("Error preparing email with contact query: {:?}", e),
         }
     }
     
@@ -396,6 +403,7 @@ async fn read_contacts() -> Result<String, AppError> {
         LIMIT 1000
     "#;
     
+    println!("Querying phone numbers with contact names...");
     {
         match conn.prepare(phone_query) {
             Ok(mut stmt) => {
@@ -411,6 +419,7 @@ async fn read_contacts() -> Result<String, AppError> {
                         phone
                     );
                     
+                    println!("Found phone with contact: {}", contact_info);
                     phone_count += 1;
                     
                     Ok(contact_info)
@@ -421,14 +430,14 @@ async fn read_contacts() -> Result<String, AppError> {
                         for row in rows {
                             match row {
                                 Ok(contact) => contacts.push(contact),
-                                Err(_) => {}
+                                Err(e) => println!("Error processing phone with contact: {:?}", e),
                             }
                         }
                     },
-                    Err(_) => {}
+                    Err(e) => println!("Error querying phones with contacts: {:?}", e),
                 }
             },
-            Err(_) => {}
+            Err(e) => println!("Error preparing phone with contact query: {:?}", e),
         }
     }
     
@@ -464,17 +473,32 @@ async fn read_contacts() -> Result<String, AppError> {
 // Tauri commands
 #[tauri::command]
 async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
+    println!("Attempting to fetch conversations...");
+    
     let db_path = match get_imessage_db_path() {
-        Ok(path) => path,
-        Err(e) => return Err(e),
+        Ok(path) => {
+            println!("Found iMessage database at: {:?}", path);
+            path
+        },
+        Err(e) => {
+            println!("Error finding iMessage database: {:?}", e);
+            return Err(e);
+        }
     };
     
     let conn = match Connection::open(&db_path) {
-        Ok(conn) => conn,
-        Err(e) => return Err(AppError::DatabaseConnectionError(e)),
+        Ok(conn) => {
+            println!("Successfully opened database connection");
+            conn
+        },
+        Err(e) => {
+            println!("Error connecting to database: {:?}", e);
+            return Err(AppError::DatabaseConnectionError(e));
+        }
     };
     
     // Try a simpler query first to guarantee we get some results
+    println!("Preparing to query conversations...");
     let query = r#"
         SELECT 
             c.ROWID as chat_id, 
@@ -494,6 +518,7 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         LIMIT 100
     "#;
     
+    println!("Executing query: {}", query);
     let mut stmt = conn.prepare(query)?;
     
     let conversation_iter = stmt.query_map([], |row| {
@@ -508,6 +533,8 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
             _ => 0, // Default to 0 for NULL or invalid dates
         };
         
+        println!("Processing conversation: id={}, name={:?}, date={}", chat_id, display_name, last_message_date);
+        
         Ok(Conversation {
             id: chat_id.to_string(),
             name: display_name,
@@ -519,13 +546,17 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     let mut conversations = Vec::new();
     for conversation in conversation_iter {
         match conversation {
-            Ok(conv) => conversations.push(conv),
-            Err(_) => {}
+            Ok(conv) => {
+                println!("Found conversation: id={}, name={:?}", conv.id, conv.name);
+                conversations.push(conv);
+            },
+            Err(e) => println!("Error processing conversation: {:?}", e),
         }
     }
     
     // If we couldn't find any conversations, try an even simpler query
     if conversations.is_empty() {
+        println!("No conversations found, trying simpler query...");
         let simple_query = r#"
             SELECT 
                 ROWID as chat_id, 
@@ -535,11 +566,14 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
             LIMIT 100
         "#;
         
+        println!("Executing simpler query: {}", simple_query);
         let mut simple_stmt = conn.prepare(simple_query)?;
         
         let simple_iter = simple_stmt.query_map([], |row| {
             let chat_id: i64 = row.get(0)?;
             let display_name: Option<String> = row.get(1)?;
+            
+            println!("Processing basic conversation: id={}, name={:?}", chat_id, display_name);
             
             Ok(Conversation {
                 id: chat_id.to_string(),
@@ -551,17 +585,23 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         
         for conversation in simple_iter {
             match conversation {
-                Ok(conv) => conversations.push(conv),
-                Err(_) => {}
+                Ok(conv) => {
+                    println!("Found basic conversation: id={}, name={:?}", conv.id, conv.name);
+                    conversations.push(conv);
+                },
+                Err(e) => println!("Error processing basic conversation: {:?}", e),
             }
         }
     }
     
+    println!("Total conversations found: {}", conversations.len());
     Ok(conversations)
 }
 
 #[tauri::command]
 async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError> {
+    println!("Fetching messages for conversation ID: {}", conversation_id);
+    
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
     
@@ -624,6 +664,9 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
         
+        println!("Found message: id={}, is_from_me={}, date={}, sender={:?}", 
+            message_id, is_from_me, date, sender_name);
+        
         Ok(Message {
             id: message_id,
             text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
@@ -638,23 +681,67 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
     for message in message_iter {
         match message {
             Ok(msg) => messages.push(msg),
-            Err(_) => {}
+            Err(e) => println!("Error processing message: {:?}", e),
         }
     }
     
+    println!("Total messages found: {}", messages.len());
     Ok(messages)
 }
 
 #[tauri::command]
 async fn search_messages(query: String) -> Result<SearchResult, AppError> {
+    println!("Searching for messages containing: {}", query);
+    
+    // Parse advanced search parameters
+    let mut text_query = String::new();
+    let mut start_timestamp: Option<i64> = None;
+    let mut end_timestamp: Option<i64> = None;
+    let mut sender_filter: Option<String> = None;
+    
+    // Split the query by spaces and parse special commands
+    let parts: Vec<&str> = query.split(' ').collect();
+    for part in parts {
+        if part.starts_with("AFTER:") {
+            if let Some(timestamp_str) = part.strip_prefix("AFTER:") {
+                if let Ok(timestamp) = timestamp_str.parse::<i64>() {
+                    start_timestamp = Some(timestamp);
+                    println!("Parsed start timestamp: {}", timestamp);
+                }
+            }
+        } else if part.starts_with("BEFORE:") {
+            if let Some(timestamp_str) = part.strip_prefix("BEFORE:") {
+                if let Ok(timestamp) = timestamp_str.parse::<i64>() {
+                    end_timestamp = Some(timestamp);
+                    println!("Parsed end timestamp: {}", timestamp);
+                }
+            }
+        } else if part.starts_with("FROM:") {
+            if let Some(sender) = part.strip_prefix("FROM:") {
+                sender_filter = Some(sender.to_string());
+                println!("Parsed sender filter: {}", sender);
+            }
+        } else {
+            // Add to regular text query
+            if !text_query.is_empty() {
+                text_query.push(' ');
+            }
+            text_query.push_str(part);
+        }
+    }
+    
+    // If text query is empty after parsing special commands, search for all messages
+    if text_query.is_empty() {
+        text_query = "%".to_string();
+    } else {
+        text_query = format!("%{}%", text_query);
+    }
+    
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
     
-    // For case-insensitive search we use LIKE with the pattern wrapped in %
-    let search_pattern = format!("%{}%", query);
-    
-    // Query messages across all conversations containing the search term
-    let sql = r#"
+    // Start building the SQL query with additional WHERE clauses
+    let mut sql = String::from(r#"
         SELECT 
             m.ROWID as message_id,
             m.text,
@@ -671,14 +758,73 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             handle h ON m.handle_id = h.ROWID
         WHERE 
             m.text LIKE ?
-        ORDER BY 
-            m.date DESC
-        LIMIT 500
-    "#;
+    "#);
     
-    let mut stmt = conn.prepare(sql)?;
+    // Add date filters if provided
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(text_query)];
     
-    let message_iter = stmt.query_map([&search_pattern], |row| {
+    if let Some(start_time) = start_timestamp {
+        // Convert Unix timestamp to Apple timestamp (seconds to nanoseconds)
+        let apple_start = start_time as i64 * 1_000_000_000;
+        sql.push_str(" AND m.date >= ?");
+        params.push(Box::new(apple_start));
+    }
+    
+    if let Some(end_time) = end_timestamp {
+        // Convert Unix timestamp to Apple timestamp (seconds to nanoseconds)
+        let apple_end = end_time as i64 * 1_000_000_000;
+        sql.push_str(" AND m.date <= ?");
+        params.push(Box::new(apple_end));
+    }
+    
+    // Add sender filter if provided
+    if let Some(sender) = &sender_filter {
+        sql.push_str(" AND (");
+        
+        // Check if sender might be a phone number
+        let is_numeric = sender.chars().all(|c| c.is_digit(10) || c == '+' || c == '-' || c == '(' || c == ')' || c == ' ');
+        
+        if is_numeric {
+            // For phone numbers, search with wildcard to handle different formats
+            let numeric_only: String = sender.chars().filter(|c| c.is_digit(10)).collect();
+            if !numeric_only.is_empty() {
+                sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                let pattern = format!("%{}%", numeric_only);
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            } else {
+                sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                let pattern = format!("%{}%", sender);
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            }
+        } else if sender.contains('@') {
+            // For emails, do exact match (case insensitive)
+            sql.push_str("LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?)");
+            params.push(Box::new(sender.clone()));
+            params.push(Box::new(sender.clone()));
+        } else {
+            // For names or other identifiers, use LIKE
+            sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+            let pattern = format!("%{}%", sender);
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+        
+        sql.push_str(")");
+    }
+    
+    // Add ordering and limit
+    sql.push_str(" ORDER BY m.date DESC LIMIT 500");
+    
+    println!("Executing advanced search query: {}", sql);
+    
+    let mut stmt = conn.prepare(&sql)?;
+    
+    // Create a slice of ToSql trait objects from our params vector
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    
+    let message_iter = stmt.query_map(param_refs.as_slice(), |row| {
         let message_id: i64 = row.get(0)?;
         let text: Option<String> = row.get(1)?;
         
@@ -720,6 +866,9 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
         
+        println!("Found matching message: id={}, chat_id={:?}, sender={:?}", 
+            message_id, chat_id, sender_name);
+        
         Ok(Message {
             id: message_id,
             text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
@@ -734,11 +883,12 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     for message in message_iter {
         match message {
             Ok(msg) => messages.push(msg),
-            Err(_) => {}
+            Err(e) => println!("Error processing search result: {:?}", e),
         }
     }
     
     let total_count = messages.len();
+    println!("Total matching messages found: {}", total_count);
     
     Ok(SearchResult {
         messages,

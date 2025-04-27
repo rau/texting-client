@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 
 AddressBook-v22.db
+AddressBook-v22.db-shm
+AddressBook-v22.db-wal
+AddressBook-v22.abcddb
+AddressBook-v22.abcddb-journal
+AddressBook-v22.abcddb-wal
+AddressBook-v22.abcddb-wal
