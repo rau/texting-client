@@ -62,10 +62,6 @@ export function AdvancedSearch({
 		endDate: undefined,
 		selectedContact: null,
 	})
-	const [isStartDateOpen, setIsStartDateOpen] = useState(false)
-	const [isEndDateOpen, setIsEndDateOpen] = useState(false)
-	const [isContactPickerOpen, setIsContactPickerOpen] = useState(false)
-
 	// Collect all contacts from the contactMap
 	const contacts = Object.values(contactMap.byId)
 
@@ -79,14 +75,6 @@ export function AdvancedSearch({
 		}
 	}
 
-	const clearDateRange = () => {
-		setSearchParams((prev) => ({
-			...prev,
-			startDate: undefined,
-			endDate: undefined,
-		}))
-	}
-
 	const clearSelectedContact = () => {
 		setSearchParams((prev) => ({
 			...prev,
@@ -96,25 +84,23 @@ export function AdvancedSearch({
 
 	return (
 		<Card className='w-full max-w-4xl mx-auto shadow-sm'>
-			<CardHeader className='border-b pb-3'>
+			<CardHeader className='border-b pb-2'>
 				<CardTitle className='text-xl font-semibold'>Message Search</CardTitle>
 			</CardHeader>
-			<CardContent className='pt-6'>
-				<div className='grid gap-6'>
+			<CardContent className='pt-4'>
+				<div className='grid gap-4'>
 					<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
 						{/* Date Range Picker */}
-						<div className='space-y-2'>
+						<div className='space-y-1.5'>
 							<Label htmlFor='date-range' className='text-sm font-medium'>
 								Date Range
 							</Label>
 							<div className='flex items-center gap-2'>
-								<Popover
-									open={isStartDateOpen}
-									onOpenChange={setIsStartDateOpen}
-								>
-									<PopoverTrigger asChild>
+								<Popover>
+									<PopoverTrigger>
 										<Button
 											id='date-range'
+											type='button'
 											variant='outline'
 											className={cn(
 												"justify-start text-left font-normal w-full",
@@ -127,7 +113,7 @@ export function AdvancedSearch({
 												: "Start date"}
 										</Button>
 									</PopoverTrigger>
-									<PopoverContent className='w-auto p-0' align='start'>
+									<PopoverContent className=''>
 										<Calendar
 											mode='single'
 											selected={searchParams.startDate}
@@ -136,7 +122,6 @@ export function AdvancedSearch({
 													...prev,
 													startDate: date,
 												}))
-												setIsStartDateOpen(false)
 											}}
 											initialFocus
 										/>
@@ -145,9 +130,10 @@ export function AdvancedSearch({
 
 								<span className='text-muted-foreground'>to</span>
 
-								<Popover open={isEndDateOpen} onOpenChange={setIsEndDateOpen}>
-									<PopoverTrigger asChild>
+								<Popover>
+									<PopoverTrigger>
 										<Button
+											type='button'
 											variant='outline'
 											className={cn(
 												"justify-start text-left font-normal w-full",
@@ -160,7 +146,11 @@ export function AdvancedSearch({
 												: "End date"}
 										</Button>
 									</PopoverTrigger>
-									<PopoverContent className='w-auto p-0' align='start'>
+									<PopoverContent
+										className='w-auto p-0'
+										align='start'
+										side='bottom'
+									>
 										<Calendar
 											mode='single'
 											selected={searchParams.endDate}
@@ -169,7 +159,6 @@ export function AdvancedSearch({
 													...prev,
 													endDate: date,
 												}))
-												setIsEndDateOpen(false)
 											}}
 											initialFocus
 										/>
@@ -179,17 +168,15 @@ export function AdvancedSearch({
 						</div>
 
 						{/* Contact Selector */}
-						<div className='space-y-2'>
+						<div className='space-y-1.5'>
 							<Label htmlFor='contact-select' className='text-sm font-medium'>
 								Select Contact
 							</Label>
-							<Popover
-								open={isContactPickerOpen}
-								onOpenChange={setIsContactPickerOpen}
-							>
-								<PopoverTrigger asChild>
+							<Popover>
+								<PopoverTrigger>
 									<Button
 										id='contact-select'
+										type='button'
 										variant='outline'
 										role='combobox'
 										className={cn(
@@ -203,8 +190,12 @@ export function AdvancedSearch({
 										<ChevronDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
 									</Button>
 								</PopoverTrigger>
-								<PopoverContent className='w-full p-0'>
-									<Command>
+								<PopoverContent
+									className='w-full p-0'
+									align='start'
+									side='bottom'
+								>
+									<Command className='w-[400px]'>
 										<CommandInput placeholder='Search contacts...' />
 										<CommandList>
 											<CommandEmpty>No contacts found.</CommandEmpty>
@@ -217,7 +208,6 @@ export function AdvancedSearch({
 																...prev,
 																selectedContact: contact,
 															}))
-															setIsContactPickerOpen(false)
 														}}
 														className='flex items-center gap-2 cursor-pointer'
 													>
@@ -277,7 +267,7 @@ export function AdvancedSearch({
 					)}
 
 					{/* Message Search */}
-					<div className='space-y-2'>
+					<div className='space-y-1.5'>
 						<Label htmlFor='message-search' className='text-sm font-medium'>
 							Search Messages
 						</Label>

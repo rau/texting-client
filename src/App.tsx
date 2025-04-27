@@ -52,23 +52,15 @@ function App() {
 	const [loading, setLoading] = useState<boolean>(true)
 	const [error, setError] = useState<string | null>(null)
 	const [searchQuery, setSearchQuery] = useState<string>("")
-	const [searchParams, setSearchParams] = useState<SearchParams>({
-		query: "",
-		startDate: undefined,
-		endDate: undefined,
-		selectedContact: null,
-	})
 	const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
 	const [isSearching, setIsSearching] = useState<boolean>(false)
 	const [contactsData, setContactsData] = useState<string | null>(null)
-	const [isLoadingContacts, setIsLoadingContacts] = useState<boolean>(false)
-	const [showContacts, setShowContacts] = useState<boolean>(false)
+
 	const [contactMap, setContactMap] = useState<ContactMap>({
 		byId: {},
 		byPhone: {},
 		byEmail: {},
 	})
-	const [contactSearchQuery, setContactSearchQuery] = useState<string>("")
 	const [conversationTitles, setConversationTitles] = useState<
 		Record<string, string>
 	>({})
@@ -392,7 +384,6 @@ function App() {
 		// Load contacts automatically when the app starts
 		const loadContacts = async () => {
 			try {
-				setIsLoadingContacts(true)
 				const contacts = await invoke("read_contacts")
 				console.log("Fetched contacts:", contacts)
 				setContactsData(contacts as string)
@@ -400,7 +391,6 @@ function App() {
 				console.error("Failed to load contacts:", error)
 				setContactsData("Error loading contacts: " + String(error))
 			} finally {
-				setIsLoadingContacts(false)
 			}
 		}
 
@@ -470,7 +460,6 @@ function App() {
 		if (!params.query.trim()) return
 
 		setIsSearching(true)
-		setSearchParams(params)
 
 		try {
 			// Build a more advanced search query with additional filters
@@ -519,148 +508,9 @@ function App() {
 		}
 	}
 
-	const handleKeyDown = (e: React.KeyboardEvent) => {
-		if (e.key === "Enter") {
-			handleSearch(searchParams)
-		}
-	}
-
 	// Function to jump to a conversation from search results
 	const jumpToConversation = (chatId: string) => {
 		handleSelectConversation(chatId)
-	}
-
-	// Function to load contacts from AddressBook
-	const handleRefreshContacts = async () => {
-		setIsLoadingContacts(true)
-		setContactsData(null)
-		try {
-			const contacts = await invoke("read_contacts")
-			console.log("Fetched contacts:", contacts)
-			setContactsData(contacts as string)
-		} catch (error) {
-			console.error("Failed to load contacts:", error)
-			setContactsData("Error loading contacts: " + String(error))
-		} finally {
-			setIsLoadingContacts(false)
-		}
-	}
-
-	// Toggle contacts visibility
-	const handleToggleContacts = () => {
-		setShowContacts((prev) => !prev)
-		// Clear search query when hiding contacts
-		if (showContacts) {
-			setContactSearchQuery("")
-		}
-	}
-
-	// Parse contacts data for better display
-	const renderContactsData = () => {
-		if (!contactsData || !showContacts) return null
-
-		// Split the data into lines
-		const lines = contactsData.split("\n")
-
-		// Extract the summary section
-		const summaryEndIndex = lines.findIndex((line) => line === "")
-		const summaryLines = lines
-			.slice(0, summaryEndIndex)
-			.filter((line) => line.trim() !== "")
-		const contactLines = lines
-			.slice(summaryEndIndex + 1)
-			.filter((line) => line.trim() !== "")
-
-		// Filter contacts based on search query
-		const filteredContactLines = contactSearchQuery.trim()
-			? contactLines.filter((line) =>
-					line.toLowerCase().includes(contactSearchQuery.toLowerCase())
-			  )
-			: contactLines
-
-		return (
-			<div className='p-4 bg-white border-b border-gray-200'>
-				<div className='flex justify-between items-center mb-3'>
-					<h3 className='text-lg font-semibold'>Contacts Data</h3>
-					<div className='flex space-x-2'>
-						<button
-							className='bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600 focus:outline-none text-sm'
-							onClick={handleRefreshContacts}
-							disabled={isLoadingContacts}
-						>
-							{isLoadingContacts ? "Refreshing..." : "Refresh"}
-						</button>
-						<button
-							className='bg-gray-500 text-white px-3 py-1 rounded hover:bg-gray-600 focus:outline-none text-sm'
-							onClick={handleToggleContacts}
-						>
-							Hide Contacts
-						</button>
-					</div>
-				</div>
-
-				{/* Contact search input */}
-				<div className='mb-3'>
-					<input
-						type='text'
-						placeholder='Search contacts...'
-						className='w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm'
-						value={contactSearchQuery}
-						onChange={(e) => setContactSearchQuery(e.target.value)}
-					/>
-				</div>
-
-				{/* Summary section */}
-				<div className='bg-gray-100 p-3 rounded-lg mb-3 text-sm'>
-					{summaryLines.map((line, index) => (
-						<div key={`summary-${index}`} className='font-medium'>
-							{line}
-						</div>
-					))}
-				</div>
-
-				{/* Contacts list - now in a scrollable container with max height */}
-				<div className='max-h-96 overflow-y-auto pr-1'>
-					<div className='space-y-2'>
-						{filteredContactLines.length > 0 ? (
-							filteredContactLines.map((line, index) => {
-								// Parse contact data
-								let isContact = line.includes("Contact [ID:")
-								let isEmail = line.includes("Email [ID:")
-								let isPhone = line.includes("Phone [ID:")
-
-								let bgColor = isContact
-									? "bg-blue-50 border-blue-200"
-									: isEmail
-									? "bg-green-50 border-green-200"
-									: isPhone
-									? "bg-amber-50 border-amber-200"
-									: "bg-gray-50 border-gray-200"
-
-								return (
-									<div
-										key={`contact-${index}`}
-										className={`p-2 rounded ${bgColor} border text-sm hover:shadow-sm transition-shadow`}
-									>
-										{line}
-									</div>
-								)
-							})
-						) : (
-							<div className='text-center py-4 text-gray-500'>
-								No contacts matching "{contactSearchQuery}"
-							</div>
-						)}
-					</div>
-				</div>
-
-				{/* Contact count */}
-				<div className='mt-2 text-xs text-gray-500 text-right'>
-					Showing {filteredContactLines.length} of {contactLines.length}{" "}
-					contacts
-				</div>
-			</div>
-		)
 	}
 
 	return (
@@ -675,9 +525,6 @@ function App() {
 					/>
 				</div>
 			</div>
-
-			{/* Contacts Data Display */}
-			{renderContactsData()}
 
 			<div className='flex flex-1 overflow-hidden'>
 				{/* Sidebar */}

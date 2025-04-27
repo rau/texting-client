@@ -664,8 +664,6 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
         
-        println!("Found message: id={}, is_from_me={}, date={}, sender={:?}", 
-            message_id, is_from_me, date, sender_name);
         
         Ok(Message {
             id: message_id,
