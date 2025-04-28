@@ -52,7 +52,6 @@ pub struct ContactInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ContactResponse {
     contacts: Vec<ContactInfo>,
-    text_response: String, // Keep the old format response
 }
 
 #[derive(Debug)]
@@ -271,7 +270,6 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
             println!("Error finding AddressBook database: {:?}", e);
             return Ok(ContactResponse {
                 contacts: Vec::new(),
-                text_response: format!("Error finding AddressBook database: {}\n\nPlease make sure AddressBook-v22.db exists in the project root directory.", e)
             });
         }
     };
@@ -285,7 +283,6 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
             println!("Error connecting to AddressBook database: {:?}", e);
             return Ok(ContactResponse {
                 contacts: Vec::new(),
-                text_response: format!("Error connecting to AddressBook database: {}\n\nThe file may be corrupted or not have the expected structure.", e)
             });
         }
     };
@@ -583,15 +580,8 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
         let db_info = format!("Database path: {}\n", db_path.display());
         return Ok(ContactResponse {
             contacts: Vec::new(),
-            text_response: format!("{}No contacts found in the database.\n\nTables may not have the expected structure. The expected tables are:\n- ZABCDRECORD (for contact names and photos)\n- ZABCDEMAILADDRESS (for emails)\n- ZABCDPHONENUMBER (for phones)\n- ZABCDLIKENESS (for legacy photos)", db_info)
         });
     }
-    
-    // Add a summary header
-    let summary = format!(
-        "===== ADDRESS BOOK CONTACTS SUMMARY =====\nUsing database: {}\nFound {} contacts, {} emails, and {} phone numbers\n\n",
-        db_path.display(), contact_count, email_count, phone_count
-    );
     
     // Sort contacts alphabetically - contacts first, then emails, then phones
     text_output.sort_by(|a, b| {
@@ -610,7 +600,6 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
     
     Ok(ContactResponse {
         contacts: contact_map.into_values().collect(),
-        text_response: format!("{}{}", summary, text_output.join("\n"))
     })
 }
 
