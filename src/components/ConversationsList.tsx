@@ -1,4 +1,4 @@
-import { Conversation } from "../types"
+import { Conversation } from "../global"
 
 type ConversationsListProps = {
 	conversations: Conversation[]

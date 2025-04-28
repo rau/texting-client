@@ -20,15 +20,19 @@ export type SearchResult = {
 	total_count: number
 }
 
-export type ContactInfo = {
-	id: string
-	name: string
-	type: "contact" | "email" | "phone"
-	value?: string
+export type Contact = {
+	contact_id: string
+	emails: string[]
+	phones: string[]
+	first_name: string
+	last_name: string
+	nickname: string
+	organization: string
+	photo: ContactPhoto
 }
 
-export type ContactMap = {
-	byId: Record<string, ContactInfo>
-	byPhone: Record<string, ContactInfo>
-	byEmail: Record<string, ContactInfo>
+export type ContactPhoto = {
+	full_photo: number[] | null
+	thumbnail: number[] | null
+	legacy_photo: number[] | null
 }

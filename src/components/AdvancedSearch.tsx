@@ -20,6 +20,7 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
+import { Contact } from "@/types"
 import { format } from "date-fns"
 import {
 	Calendar as CalendarIcon,
@@ -30,51 +31,15 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
-// Utility function to format phone numbers
-const formatPhoneNumber = (phoneNumber: string): string => {
-	// Remove any non-numeric characters if they somehow exist
-	const cleaned = phoneNumber.replace(/\D/g, "")
-
-	// Format as (XXX) XXX-XXXX if it's a 10-digit number
-	if (cleaned.length === 10) {
-		return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`
-	}
-
-	// Format as +X (XXX) XXX-XXXX if it's 11 digits starting with 1
-	if (cleaned.length === 11 && cleaned.startsWith("1")) {
-		return `+${cleaned[0]} (${cleaned.slice(1, 4)}) ${cleaned.slice(
-			4,
-			7
-		)}-${cleaned.slice(7)}`
-	}
-
-	// Return as is if it doesn't match these patterns
-	return cleaned
-}
-
-type ContactInfo = {
-	id: string
-	name: string
-	type: "contact" | "email" | "phone"
-	value?: string
-	rawValue?: string // Store the raw (stripped) value for phone numbers
-}
-
 type ConversationInfo = {
 	id: string
 	name: string
-	participants: ContactInfo[]
-}
-
-type ContactMap = {
-	byId: Record<string, ContactInfo>
-	byPhone: Record<string, ContactInfo>
-	byEmail: Record<string, ContactInfo>
+	participants: Contact[]
 }
 
 type AdvancedSearchProps = {
 	onSearch: (params: SearchParams) => void
-	contactMap: ContactMap
+	contacts: Contact[]
 	conversations: ConversationInfo[]
 }
 
@@ -82,13 +47,13 @@ export type SearchParams = {
 	query: string
 	startDate: Date | undefined
 	endDate: Date | undefined
-	selectedContacts: ContactInfo[]
+	selectedContacts: Contact[]
 	selectedConversation: ConversationInfo | null
 }
 
 export function AdvancedSearch({
 	onSearch,
-	contactMap,
+	contacts,
 	conversations,
 }: AdvancedSearchProps) {
 	const [searchParams, setSearchParams] = useState<SearchParams>({
@@ -100,19 +65,11 @@ export function AdvancedSearch({
 	})
 
 	// Collect all contacts from the contactMap and sort them alphabetically by name
-	const contacts = useMemo(() => {
-		return Object.values(contactMap.byId)
-			.filter((contact) => contact.name.trim() !== "") // Filter out empty names
-			.sort((a, b) => a.name.localeCompare(b.name))
-			.map((contact) => ({
-				...contact,
-				// Format phone numbers for display while keeping the raw value
-				value:
-					contact.type === "phone" && contact.value
-						? formatPhoneNumber(contact.value)
-						: contact.value,
-			}))
-	}, [contactMap])
+	const contactsArray = useMemo(() => {
+		return contacts
+			.filter((contact) => contact.first_name.trim() !== "") // Filter out empty names
+			.sort((a, b) => a.first_name.localeCompare(b.first_name))
+	}, [contacts])
 
 	return (
 		<div className='w-80 border-r border-border flex flex-col'>
@@ -254,24 +211,25 @@ export function AdvancedSearch({
 								<CommandList>
 									<CommandEmpty>No contacts found.</CommandEmpty>
 									<CommandGroup>
-										{contacts.map((contact) => (
+										{contactsArray.map((contact) => (
 											<CommandItem
-												key={contact.id}
+												key={contact.contact_id}
 												onSelect={() => {
 													setSearchParams((prev) => {
 														const isAlreadySelected =
 															prev.selectedContacts.some(
-																(c) => c.id === contact.id
+																(c) => c.contact_id === contact.contact_id
 															)
 														const newContacts = isAlreadySelected
 															? prev.selectedContacts.filter(
-																	(c) => c.id !== contact.id
+																	(c) => c.contact_id !== contact.contact_id
 															  )
 															: [...prev.selectedContacts, contact]
 														const newParams = {
 															...prev,
 															selectedContacts: newContacts,
 														}
+														console.log("newParams", newParams)
 														onSearch(newParams)
 														return newParams
 													})
@@ -280,22 +238,43 @@ export function AdvancedSearch({
 											>
 												<div className='flex items-center gap-2 flex-1'>
 													<Avatar className='h-8 w-8'>
+														<AvatarImage
+															src={
+																contact.photo?.full_photo
+																	? `data:image/jpeg;base64,${btoa(
+																			String.fromCharCode(
+																				...new Uint8Array(
+																					contact.photo.full_photo
+																				)
+																			)
+																	  )}`
+																	: "/placeholder.svg"
+															}
+														/>
 														<AvatarFallback>
-															{contact.name
+															{contact.first_name
 																.split(" ")
 																.map((n) => n[0])
 																.join("")}
+															{contact.last_name
+																? contact.last_name
+																		.split(" ")
+																		.map((n) => n[0])
+																		.join("")
+																: ""}
 														</AvatarFallback>
 													</Avatar>
 													<div className='flex flex-col'>
-														<span className='font-medium'>{contact.name}</span>
+														<span className='font-medium'>
+															{contact.first_name} {contact.last_name}
+														</span>
 														<span className='text-xs text-muted-foreground'>
-															{contact.value || contact.type}
+															{contact.phones[0]}
 														</span>
 													</div>
 												</div>
 												{searchParams.selectedContacts.some(
-													(c) => c.id === contact.id
+													(c) => c.contact_id === contact.contact_id
 												) && <Check className='h-4 w-4 ml-2' />}
 											</CommandItem>
 										))}
@@ -311,20 +290,31 @@ export function AdvancedSearch({
 					<div className='flex flex-wrap gap-2 mb-4'>
 						{searchParams.selectedContacts.map((contact) => (
 							<Badge
-								key={contact.id}
+								key={contact.contact_id}
 								variant='secondary'
 								className='flex items-center gap-1 py-1 px-3'
 							>
 								<Avatar className='h-5 w-5 mr-1'>
-									<AvatarImage src={"/placeholder.svg"} alt={contact.name} />
+									<AvatarImage
+										src={
+											contact.photo?.thumbnail
+												? `data:image/jpeg;base64,${btoa(
+														String.fromCharCode(
+															...new Uint8Array(contact.photo.thumbnail)
+														)
+												  )}`
+												: "/placeholder.svg"
+										}
+										alt={contact.first_name}
+									/>
 									<AvatarFallback className='text-[10px]'>
-										{contact.name
+										{contact.first_name
 											.split(" ")
 											.map((n) => n[0])
 											.join("")}
 									</AvatarFallback>
 								</Avatar>
-								<span>{contact.name}</span>
+								<span>{contact.first_name}</span>
 								<Button
 									variant='ghost'
 									size='icon'
@@ -334,9 +324,10 @@ export function AdvancedSearch({
 											const newParams = {
 												...prev,
 												selectedContacts: prev.selectedContacts.filter(
-													(c) => c.id !== contact.id
+													(c) => c.contact_id !== contact.contact_id
 												),
 											}
+											console.log("newParams", newParams)
 											onSearch(newParams)
 											return newParams
 										})

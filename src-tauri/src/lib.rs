@@ -30,6 +30,31 @@ pub struct SearchResult {
     total_count: usize,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ContactPhoto {
+    full_photo: Option<Vec<u8>>,
+    thumbnail: Option<Vec<u8>>,
+    legacy_photo: Option<Vec<u8>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ContactInfo {
+    contact_id: i64,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    nickname: Option<String>,
+    organization: Option<String>,
+    photo: Option<ContactPhoto>,
+    emails: Vec<String>,
+    phones: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ContactResponse {
+    contacts: Vec<ContactInfo>,
+    text_response: String, // Keep the old format response
+}
+
 #[derive(Debug)]
 pub enum AppError {
     DatabaseNotFound,
@@ -234,7 +259,7 @@ fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
 
 // Read contacts from AddressBook database
 #[tauri::command]
-async fn read_contacts() -> Result<String, AppError> {
+async fn read_contacts() -> Result<ContactResponse, AppError> {
     println!("Attempting to read contacts from AddressBook...");
     
     let db_path = match get_addressbook_db_path() {
@@ -244,7 +269,10 @@ async fn read_contacts() -> Result<String, AppError> {
         },
         Err(e) => {
             println!("Error finding AddressBook database: {:?}", e);
-            return Ok(format!("Error finding AddressBook database: {}\n\nPlease make sure AddressBook-v22.db exists in the project root directory.", e));
+            return Ok(ContactResponse {
+                contacts: Vec::new(),
+                text_response: format!("Error finding AddressBook database: {}\n\nPlease make sure AddressBook-v22.db exists in the project root directory.", e)
+            });
         }
     };
     
@@ -255,30 +283,38 @@ async fn read_contacts() -> Result<String, AppError> {
         },
         Err(e) => {
             println!("Error connecting to AddressBook database: {:?}", e);
-            return Ok(format!("Error connecting to AddressBook database: {}\n\nThe file may be corrupted or not have the expected structure.", e));
+            return Ok(ContactResponse {
+                contacts: Vec::new(),
+                text_response: format!("Error connecting to AddressBook database: {}\n\nThe file may be corrupted or not have the expected structure.", e)
+            });
         }
     };
     
-    let mut contacts = Vec::new();
     let mut contact_count = 0;
     let mut email_count = 0;
     let mut phone_count = 0;
+    let mut text_output = Vec::new();
+    let mut contact_map: std::collections::HashMap<i64, ContactInfo> = std::collections::HashMap::new();
     
-    // First query: Get basic contact information from ZABCDRECORD
+    // First query: Get basic contact information and photos from ZABCDRECORD
     let basic_query = r#"
         SELECT 
             Z_PK,
             ZFIRSTNAME,
             ZLASTNAME,
             ZNICKNAME,
-            ZORGANIZATION
+            ZORGANIZATION,
+            ZIMAGEDATA,
+            ZTHUMBNAILIMAGEDATA
         FROM 
             ZABCDRECORD
         WHERE 
             ZFIRSTNAME IS NOT NULL OR 
             ZLASTNAME IS NOT NULL OR 
             ZORGANIZATION IS NOT NULL OR
-            ZNICKNAME IS NOT NULL
+            ZNICKNAME IS NOT NULL OR
+            ZIMAGEDATA IS NOT NULL OR
+            ZTHUMBNAILIMAGEDATA IS NOT NULL
         LIMIT 1000
     "#;
     
@@ -292,6 +328,8 @@ async fn read_contacts() -> Result<String, AppError> {
                     let last_name: Option<String> = row.get(2)?;
                     let nickname: Option<String> = row.get(3)?;
                     let organization: Option<String> = row.get(4)?;
+                    let full_photo: Option<Vec<u8>> = row.get(5)?;
+                    let thumbnail: Option<Vec<u8>> = row.get(6)?;
                     
                     let name_parts = vec![
                         first_name.as_deref(), 
@@ -306,10 +344,46 @@ async fn read_contacts() -> Result<String, AppError> {
                         .collect::<Vec<_>>()
                         .join(" ");
                     
-                    let contact_info = if full_name.is_empty() {
-                        format!("Contact [ID: {}]: <No Name>", id)
+                    let photo_info = if full_photo.is_some() || thumbnail.is_some() {
+                        let photo_data = ContactPhoto {
+                            full_photo,
+                            thumbnail,
+                            legacy_photo: None,
+                        };
+                        
+                        // Store in contact_map
+                        contact_map.entry(id).or_insert(ContactInfo {
+                            contact_id: id,
+                            first_name: first_name.clone(),
+                            last_name: last_name.clone(),
+                            nickname: nickname.clone(),
+                            organization: organization.clone(),
+                            photo: Some(photo_data),
+                            emails: Vec::new(),
+                            phones: Vec::new(),
+                        });
+                        
+                        format!(", Has Photo: yes")
                     } else {
-                        format!("Contact [ID: {}]: {}", id, full_name)
+                        // Store in contact_map without photo
+                        contact_map.entry(id).or_insert(ContactInfo {
+                            contact_id: id,
+                            first_name: first_name.clone(),
+                            last_name: last_name.clone(),
+                            nickname: nickname.clone(),
+                            organization: organization.clone(),
+                            photo: None,
+                            emails: Vec::new(),
+                            phones: Vec::new(),
+                        });
+                        
+                        format!(", Has Photo: no")
+                    };
+                    
+                    let contact_info = if full_name.is_empty() {
+                        format!("Contact [ID: {}]: <No Name>{}", id, photo_info)
+                    } else {
+                        format!("Contact [ID: {}]: {}{}", id, full_name, photo_info)
                     };
                     
                     contact_count += 1;
@@ -321,7 +395,7 @@ async fn read_contacts() -> Result<String, AppError> {
                     Ok(rows) => {
                         for row in rows {
                             match row {
-                                Ok(contact) => contacts.push(contact),
+                                Ok(contact) => text_output.push(contact),
                                 Err(e) => println!("Error processing contact: {:?}", e),
                             }
                         }
@@ -330,6 +404,59 @@ async fn read_contacts() -> Result<String, AppError> {
                 }
             },
             Err(e) => println!("Error preparing contact query: {:?}", e),
+        }
+    }
+    
+    // Also check for legacy photos in ZABCDLIKENESS
+    let legacy_query = r#"
+        SELECT 
+            l.ZOWNER as contact_id,
+            l.ZDATA as legacy_photo
+        FROM 
+            ZABCDLIKENESS l
+        WHERE 
+            l.ZDATA IS NOT NULL
+        LIMIT 1000
+    "#;
+    
+    println!("Querying legacy photos...");
+    {
+        match conn.prepare(legacy_query) {
+            Ok(mut stmt) => {
+                let rows = stmt.query_map([], |row| {
+                    let id: i64 = row.get(0)?;
+                    let legacy_photo: Option<Vec<u8>> = row.get(1)?;
+                    
+                    // Update contact_map with legacy photo
+                    if let Some(contact) = contact_map.get_mut(&id) {
+                        if let Some(photo) = &mut contact.photo {
+                            photo.legacy_photo = legacy_photo;
+                        } else {
+                            contact.photo = Some(ContactPhoto {
+                                full_photo: None,
+                                thumbnail: None,
+                                legacy_photo,
+                            });
+                        }
+                    }
+                    
+                    let contact_info = format!("Contact [ID: {}]: Has Legacy Photo", id);
+                    Ok(contact_info)
+                });
+                
+                match rows {
+                    Ok(rows) => {
+                        for row in rows {
+                            match row {
+                                Ok(contact) => text_output.push(contact),
+                                Err(e) => println!("Error processing legacy photo: {:?}", e),
+                            }
+                        }
+                    },
+                    Err(e) => println!("Error querying legacy photos: {:?}", e),
+                }
+            },
+            Err(e) => println!("Error preparing legacy photo query: {:?}", e),
         }
     }
     
@@ -357,6 +484,11 @@ async fn read_contacts() -> Result<String, AppError> {
                     let name: String = row.get(1)?;
                     let email: String = row.get(2)?;
                     
+                    // Update contact_map with email
+                    if let Some(contact) = contact_map.get_mut(&contact_id) {
+                        contact.emails.push(email.clone());
+                    }
+                    
                     let contact_info = format!(
                         "Email [ID: {}] {}: {}", 
                         contact_id, 
@@ -373,7 +505,7 @@ async fn read_contacts() -> Result<String, AppError> {
                     Ok(rows) => {
                         for row in rows {
                             match row {
-                                Ok(contact) => contacts.push(contact),
+                                Ok(contact) => text_output.push(contact),
                                 Err(e) => println!("Error processing email with contact: {:?}", e),
                             }
                         }
@@ -414,11 +546,16 @@ async fn read_contacts() -> Result<String, AppError> {
                         .filter(|c| c.is_ascii_digit())
                         .collect();
                     
+                    // Update contact_map with phone
+                    if let Some(contact) = contact_map.get_mut(&contact_id) {
+                        contact.phones.push(clean_phone.clone());
+                    }
+                    
                     let contact_info = format!(
                         "Phone [ID: {}] {}: {}", 
                         contact_id, 
                         if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
-                        clean_phone // Use the cleaned phone number
+                        clean_phone
                     );
                     
                     phone_count += 1;
@@ -430,7 +567,7 @@ async fn read_contacts() -> Result<String, AppError> {
                     Ok(rows) => {
                         for row in rows {
                             match row {
-                                Ok(contact) => contacts.push(contact),
+                                Ok(contact) => text_output.push(contact),
                                 Err(e) => println!("Error processing phone with contact: {:?}", e),
                             }
                         }
@@ -442,9 +579,12 @@ async fn read_contacts() -> Result<String, AppError> {
         }
     }
     
-    if contacts.is_empty() {
+    if text_output.is_empty() {
         let db_info = format!("Database path: {}\n", db_path.display());
-        return Ok(format!("{}No contacts found in the database.\n\nTables may not have the expected structure. The expected tables are:\n- ZABCDRECORD (for contact names)\n- ZABCDEMAILADDRESS (for emails)\n- ZABCDPHONENUMBER (for phones)", db_info));
+        return Ok(ContactResponse {
+            contacts: Vec::new(),
+            text_response: format!("{}No contacts found in the database.\n\nTables may not have the expected structure. The expected tables are:\n- ZABCDRECORD (for contact names and photos)\n- ZABCDEMAILADDRESS (for emails)\n- ZABCDPHONENUMBER (for phones)\n- ZABCDLIKENESS (for legacy photos)", db_info)
+        });
     }
     
     // Add a summary header
@@ -454,7 +594,7 @@ async fn read_contacts() -> Result<String, AppError> {
     );
     
     // Sort contacts alphabetically - contacts first, then emails, then phones
-    contacts.sort_by(|a, b| {
+    text_output.sort_by(|a, b| {
         if a.starts_with("Contact") && !b.starts_with("Contact") {
             std::cmp::Ordering::Less
         } else if !a.starts_with("Contact") && b.starts_with("Contact") {
@@ -468,7 +608,10 @@ async fn read_contacts() -> Result<String, AppError> {
         }
     });
     
-    Ok(format!("{}{}", summary, contacts.join("\n")))
+    Ok(ContactResponse {
+        contacts: contact_map.into_values().collect(),
+        text_response: format!("{}{}", summary, text_output.join("\n"))
+    })
 }
 
 // Tauri commands

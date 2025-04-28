@@ -1,11 +1,11 @@
 import { AdvancedSearch, SearchParams } from "@/components/AdvancedSearch"
+import Loader from "@/components/Loader"
 import { MessagesView } from "@/components/MessagesView"
-import { ContactMap, Conversation, Message, SearchResult } from "@/types"
+import { Badge } from "@/components/ui/badge"
+import { Contact, Conversation, Message, SearchResult } from "@/types"
 import { invoke } from "@tauri-apps/api/core"
 import { format } from "date-fns"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import Loader from "./components/Loader"
-import { Badge } from "./components/ui/badge"
 
 // Utility function to strip non-numeric characters
 const stripNonNumeric = (str: string): string => str.replace(/\D/g, "")
@@ -18,98 +18,12 @@ function App() {
 	const [loading, setLoading] = useState<boolean>(true)
 	const [contactsLoading, setContactsLoading] = useState<boolean>(true)
 	const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
-	const [contactsData, setContactsData] = useState<string | null>(null)
-	const [contactMap, setContactMap] = useState<ContactMap>({
-		byId: {},
-		byPhone: {},
-		byEmail: {},
-	})
+	const [contacts, setContacts] = useState<Contact[] | null>(null)
 	const [conversationTitles, setConversationTitles] = useState<
 		Record<string, string>
 	>({})
 
 	// Parse contacts data into a usable map when contactsData changes
-	useEffect(() => {
-		if (!contactsData) return
-
-		const lines = contactsData.split("\n")
-		const summaryEndIndex = lines.findIndex((line) => line === "")
-		const contactLines = lines
-			.slice(summaryEndIndex + 1)
-			.filter((line) => line.trim() !== "")
-
-		const newContactMap: ContactMap = {
-			byId: {},
-			byPhone: {},
-			byEmail: {},
-		}
-
-		contactLines.forEach((line) => {
-			// Process contact entries
-			if (line.includes("Contact [ID:")) {
-				const idMatch = line.match(/Contact \[ID: (\d+)\]/)
-				if (idMatch && idMatch[1]) {
-					const id = idMatch[1]
-					const name = line.replace(/Contact \[ID: \d+\]: /, "").trim()
-
-					if (name && name !== "<No Name>") {
-						newContactMap.byId[id] = {
-							id,
-							name,
-							type: "contact",
-						}
-					}
-				}
-			}
-			// Process email entries
-			else if (line.includes("Email [ID:")) {
-				const match = line.match(/Email \[ID: (\d+)\] (.*?): (.*)/)
-				if (match && match[1] && match[3]) {
-					const id = match[1]
-					const name = match[2].trim()
-					const email = match[3].trim()
-
-					if (email) {
-						const contactInfo = {
-							id,
-							name: name !== "<No Name>" ? name : email,
-							type: "email" as const,
-							value: email,
-						}
-
-						newContactMap.byId[id] = contactInfo
-						newContactMap.byEmail[email.toLowerCase()] = contactInfo
-					}
-				}
-			}
-			// Process phone entries
-			else if (line.includes("Phone [ID:")) {
-				const match = line.match(/Phone \[ID: (\d+)\] (.*?): (.*)/)
-				if (match && match[1] && match[3]) {
-					const id = match[1]
-					const name = match[2].trim()
-					const phone = match[3].trim()
-
-					if (phone) {
-						const strippedPhone = stripNonNumeric(phone)
-						const contactInfo = {
-							id,
-							name: name !== "<No Name>" ? name : phone,
-							type: "phone" as const,
-							value: strippedPhone,
-							rawValue: phone, // Keep the original format for display
-						}
-
-						newContactMap.byId[id] = contactInfo
-						newContactMap.byPhone[strippedPhone] = contactInfo
-					}
-				}
-			}
-		})
-
-		console.log("Parsed contact map:", newContactMap)
-		setContactMap(newContactMap)
-	}, [contactsData])
 
 	// Function to match a sender ID with a contact name
 	const getContactNameForSender = (
@@ -120,8 +34,8 @@ function App() {
 		// For email addresses
 		if (senderId.includes("@")) {
 			const lowerEmail = senderId.toLowerCase()
-			if (contactMap.byEmail[lowerEmail]) {
-				return contactMap.byEmail[lowerEmail].name
+			if (contacts?.find((c) => c.emails.includes(lowerEmail))) {
+				return contacts?.find((c) => c.emails.includes(lowerEmail))?.first_name
 			}
 			return undefined
 		}
@@ -130,18 +44,19 @@ function App() {
 		const strippedNumber = stripNonNumeric(senderId)
 		if (strippedNumber) {
 			// Direct match with stripped number
-			if (contactMap.byPhone[strippedNumber]) {
-				return contactMap.byPhone[strippedNumber].name
+			if (contacts?.find((c) => c.phones.includes(strippedNumber))) {
+				return contacts?.find((c) => c.phones.includes(strippedNumber))
+					?.first_name
 			}
 
 			// Try matching last 10 digits if the number is longer
 			if (strippedNumber.length >= 10) {
 				const last10 = strippedNumber.slice(-10)
-				const matchingContact = Object.entries(contactMap.byPhone).find(
-					([phone]) => phone.endsWith(last10)
+				const matchingContact = contacts?.find((c) =>
+					c.phones.some((phone) => phone.endsWith(last10))
 				)
 				if (matchingContact) {
-					return matchingContact[1].name
+					return matchingContact.first_name
 				}
 			}
 		}
@@ -176,7 +91,7 @@ function App() {
 		return {
 			messages: updatedMessages,
 		}
-	}, [searchResults, contactMap])
+	}, [searchResults, contacts])
 
 	const generateConversationTitle = (
 		conversation: Conversation,
@@ -315,11 +230,11 @@ function App() {
 			try {
 				setContactsLoading(true)
 				const contacts = await invoke("read_contacts")
-				console.log("Fetched contacts:", contacts)
-				setContactsData(contacts as string)
+				// @ts-ignore
+				const contactsJSON = contacts.contacts as Contact[]
+				setContacts(contactsJSON)
 			} catch (error) {
 				console.error("Failed to load contacts:", error)
-				setContactsData("Error loading contacts: " + String(error))
 			} finally {
 				setContactsLoading(false)
 			}
@@ -356,13 +271,10 @@ function App() {
 			if (params.selectedContacts.length > 0) {
 				const fromQueries = params.selectedContacts.map((contact) => {
 					// Get all contacts with the same name
-					const relatedContacts = Object.values(contactMap.byId).filter(
-						(c) => c.name === contact.name
-					)
+					const relatedContacts =
+						contacts?.filter((c) => c.first_name === contact.name) || []
 					// Create FROM: queries for each contact value
-					return relatedContacts
-						.map((c) => `FROM:${c.value || c.id}`)
-						.join(" OR ")
+					return relatedContacts.map((c) => `FROM:${c.phones[0]}`).join(" OR ")
 				})
 				// Join all contact queries with OR and wrap in parentheses
 				query = `${query} (${fromQueries.map((q) => `(${q})`).join(" OR ")})`
@@ -383,7 +295,7 @@ function App() {
 
 			await searchMessages(query.trim())
 		},
-		[contactMap.byId, searchMessages]
+		[contacts, searchMessages]
 	)
 
 	return (
@@ -394,7 +306,7 @@ function App() {
 				<>
 					<AdvancedSearch
 						onSearch={handleSearch}
-						contactMap={contactMap}
+						contacts={contacts || []}
 						conversations={conversations.map((conv) => ({
 							id: conv.id,
 							name: conversationTitles[conv.id] || conv.name || "Conversation",
