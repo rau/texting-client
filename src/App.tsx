@@ -1,45 +1,11 @@
+import { MessagesView } from "@/components/MessagesView"
 import { AdvancedSearch, SearchParams } from "@/components/ui/advanced-search"
+import { ContactMap, Conversation, Message, SearchResult } from "@/types"
 import { invoke } from "@tauri-apps/api/core"
-import { useEffect, useMemo, useRef, useState } from "react"
-
-type Conversation = {
-	id: string
-	name: string | null
-	last_message: string | null
-	last_message_date: number
-}
-
-type Message = {
-	id: number
-	text: string
-	date: number
-	is_from_me: boolean
-	chat_id?: string
-	sender_name?: string
-	contact_name?: string
-}
-
-type SearchResult = {
-	messages: Message[]
-	total_count: number
-}
-
-// New types for contact mapping
-type ContactInfo = {
-	id: string
-	name: string
-	type: "contact" | "email" | "phone"
-	value?: string
-}
-
-type ContactMap = {
-	byId: Record<string, ContactInfo>
-	byPhone: Record<string, ContactInfo>
-	byEmail: Record<string, ContactInfo>
-}
-
-// New type to store messages by conversation ID
-type MessagesByConversation = Record<string, Message[]>
+import { format } from "date-fns"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import Loader from "./components/Loader"
+import { Badge } from "./components/ui/badge"
 
 function App() {
 	const [conversations, setConversations] = useState<Conversation[]>([])
@@ -47,8 +13,9 @@ function App() {
 		string | null
 	>(null)
 	const [messages, setMessages] = useState<Message[]>([])
-	const [messagesByConversation, setMessagesByConversation] =
-		useState<MessagesByConversation>({})
+	const [messagesByConversation, setMessagesByConversation] = useState<
+		Record<string, Message[]>
+	>({})
 	const [loading, setLoading] = useState<boolean>(true)
 	const [contactsLoading, setContactsLoading] = useState<boolean>(true)
 	const [error, setError] = useState<string | null>(null)
@@ -65,9 +32,6 @@ function App() {
 	const [conversationTitles, setConversationTitles] = useState<
 		Record<string, string>
 	>({})
-
-	// Add a ref for the messages container
-	const messagesContainerRef = useRef<HTMLDivElement>(null)
 
 	// Parse contacts data into a usable map when contactsData changes
 	useEffect(() => {
@@ -212,11 +176,6 @@ function App() {
 		})
 	}
 
-	// Apply contact names to messages
-	const messagesWithContactNames = useMemo(() => {
-		return applyContactNamesToMessages(messages)
-	}, [messages, contactMap])
-
 	// Apply contact names to search results
 	const searchResultsWithContactNames = useMemo(() => {
 		if (!searchResults) return null
@@ -228,19 +187,6 @@ function App() {
 			messages: updatedMessages,
 		}
 	}, [searchResults, contactMap])
-
-	// Scroll to bottom of messages when they change or when loading completes
-	useEffect(() => {
-		if (!loading && messagesContainerRef.current && selectedConversation) {
-			// Use setTimeout to ensure this runs after the DOM updates
-			setTimeout(() => {
-				if (messagesContainerRef.current) {
-					messagesContainerRef.current.scrollTop =
-						messagesContainerRef.current.scrollHeight
-				}
-			}, 100)
-		}
-	}, [loading, messages, selectedConversation])
 
 	// Add a function to generate conversation titles
 	const generateConversationTitle = (
@@ -397,13 +343,6 @@ function App() {
 
 		// Load both conversations and contacts
 		Promise.all([loadConversations(), loadContacts()])
-
-		// Debug: Log if styles are applied
-		console.log(
-			"Style test - bg-blue-500:",
-			getComputedStyle(document.querySelector(".bg-blue-500") || document.body)
-				.backgroundColor
-		)
 	}, [])
 
 	// Combine loading states for overall app loading state
@@ -459,81 +398,16 @@ function App() {
 		}
 	}
 
-	const handleSearch = async (params: SearchParams) => {
-		console.log("handleSearch", params)
-
+	const searchMessages = useCallback(async (query: string) => {
 		setIsSearching(true)
-
 		try {
-			// Initialize query parts array to build the search query
-			const queryParts: string[] = []
-
-			// Add text search if provided
-			if (params.query.trim()) {
-				queryParts.push(params.query.trim())
-			}
-
-			// Add date filters if provided
-			if (params.startDate) {
-				const startTimestamp = Math.floor(params.startDate.getTime() / 1000)
-				queryParts.push(`AFTER:${startTimestamp}`)
-			}
-			if (params.endDate) {
-				const endTimestamp = Math.floor(params.endDate.getTime() / 1000)
-				queryParts.push(`BEFORE:${endTimestamp}`)
-			}
-
-			// Add contact filter if provided
-			if (params.selectedContact) {
-				const contact = params.selectedContact
-				const searchValues: string[] = []
-
-				// Always include the contact's name
-				searchValues.push(contact.name)
-
-				// Find all associated contacts with the same name
-				const relatedContacts = Object.values(contactMap.byId).filter(
-					(c) => c.name === contact.name
-				)
-
-				// Collect all unique identifiers with original format
-				relatedContacts.forEach((relatedContact) => {
-					if (relatedContact.value) {
-						searchValues.push(relatedContact.value)
-					}
-				})
-
-				// Remove duplicates and create OR conditions for each value
-				const uniqueSearchValues = [...new Set(searchValues)]
-				// Create FROM conditions, properly escaping quotes in values
-				const fromConditions = uniqueSearchValues.map((value) => {
-					// Escape any quotes in the value and wrap in quotes
-					const escapedValue = value.replace(/"/g, '\\"')
-					return `FROM:"${escapedValue}"`
-				})
-				queryParts.push(`(${fromConditions.join(" OR ")})`)
-			}
-
-			// Add conversation filter if provided
-			if (params.selectedConversation) {
-				const conversationId = params.selectedConversation.id
-				// Escape any quotes in the conversation ID and wrap in quotes
-				const escapedId = conversationId.replace(/"/g, '\\"')
-				queryParts.push(`CONVERSATION:"${escapedId}"`)
-			}
-
-			// If no search parameters are provided, return early with an empty result
-			if (queryParts.length === 0) {
-				setSearchResults({ messages: [], total_count: 0 })
+			if (!query.trim()) {
+				setSearchResults(null)
 				setSelectedConversation(null)
-				setIsSearching(false)
 				return
 			}
 
-			// Join all query parts with spaces
-			const query = queryParts.join(" ")
-
-			console.log("Advanced search query:", query)
+			console.log("Searching with query:", query)
 			const results = await invoke("search_messages", { query })
 			console.log("Search results:", results)
 			setSearchResults(results as SearchResult)
@@ -543,7 +417,46 @@ function App() {
 		} finally {
 			setIsSearching(false)
 		}
-	}
+	}, [])
+
+	const handleSearch = useCallback(
+		async (params: SearchParams) => {
+			let query = params.query
+
+			// Add FROM: filters for selected contacts
+			if (params.selectedContacts.length > 0) {
+				const fromQueries = params.selectedContacts.map((contact) => {
+					// Get all contacts with the same name
+					const relatedContacts = Object.values(contactMap.byId).filter(
+						(c) => c.name === contact.name
+					)
+					// Create FROM: queries for each contact value
+					return relatedContacts
+						.map((c) => `FROM:${c.value || c.id}`)
+						.join(" OR ")
+				})
+				// Join all contact queries with OR and wrap in parentheses
+				query = `${query} (${fromQueries.map((q) => `(${q})`).join(" OR ")})`
+			}
+
+			// Add date range filters
+			if (params.startDate) {
+				query += ` AFTER:${format(params.startDate, "yyyy-MM-dd")}`
+			}
+			if (params.endDate) {
+				query += ` BEFORE:${format(params.endDate, "yyyy-MM-dd")}`
+			}
+
+			// Add conversation filter
+			if (params.selectedConversation) {
+				query += ` CONVERSATION:${params.selectedConversation.id}`
+			}
+
+			setSearchQuery(query.trim())
+			await searchMessages(query.trim())
+		},
+		[contactMap.byId, searchMessages]
+	)
 
 	// Function to jump to a conversation from search results
 	const jumpToConversation = (chatId: string) => {
@@ -551,245 +464,46 @@ function App() {
 	}
 
 	return (
-		<div className='flex flex-col h-screen bg-gray-100'>
+		<div className='flex h-screen w-screen'>
 			{isAppLoading ? (
-				<div className='flex justify-center items-center h-full'>
-					<div className='animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500'></div>
-				</div>
+				<Loader />
 			) : (
 				<>
-					{/* Search Bar with Contacts Toggle Button */}
-					<div className='p-4 bg-white border-b border-gray-200'>
-						<div className='flex flex-col space-y-2'>
-							<AdvancedSearch
-								onSearch={handleSearch}
-								contactMap={contactMap}
-								conversations={conversations.map((conv) => ({
-									id: conv.id,
-									name:
-										conversationTitles[conv.id] || conv.name || "Conversation",
-									participants:
-										messagesByConversation[conv.id]
-											?.filter(
-												(msg) =>
-													!msg.is_from_me &&
-													(msg.contact_name || msg.sender_name)
-											)
-											?.map((msg) => ({
-												id: msg.sender_name || msg.contact_name || "",
-												name: msg.contact_name || msg.sender_name || "",
-												type: "contact" as const,
-											}))
-											?.filter(
-												(participant, index, self) =>
-													index ===
-													self.findIndex((p) => p.id === participant.id)
-											) || [],
-								}))}
-							/>
-						</div>
-					</div>
-
-					<div className='flex flex-1 overflow-hidden'>
-						{/* Sidebar */}
-						<div className='w-1/4 bg-white border-r border-gray-200 overflow-y-auto'>
-							<div className='p-4 border-b border-gray-200'>
-								<h1 className='text-2xl font-bold text-gray-800'>
-									Conversations
-								</h1>
-							</div>
-
-							<div className='overflow-y-auto h-full'>
-								{loading && !conversations.length ? (
-									<div className='flex justify-center items-center h-full'>
-										<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
-									</div>
-								) : error ? (
-									<div className='p-4 text-center text-red-500'>{error}</div>
-								) : (
-									<ul>
-										{conversations.length ? (
-											conversations.map((conversation) => (
-												<li
-													key={conversation.id}
-													className={`p-4 border-b border-gray-200 cursor-pointer hover:bg-gray-50 ${
-														selectedConversation === conversation.id
-															? "bg-blue-50"
-															: ""
-													}`}
-													onClick={() =>
-														handleSelectConversation(conversation.id)
-													}
-													tabIndex={0}
-													aria-label={`Conversation with ${
-														conversation.name || "Unknown"
-													}`}
-													onKeyDown={(e) => {
-														if (e.key === "Enter" || e.key === " ") {
-															handleSelectConversation(conversation.id)
-														}
-													}}
-												>
-													<div className='font-medium text-gray-800'>
-														{conversationTitles[conversation.id] ||
-															conversation.name ||
-															"Conversation"}
-													</div>
-													<div className='text-sm text-gray-500 truncate'>
-														{conversation.last_message || "No messages"}
-													</div>
-													<div className='text-xs text-gray-400'>
-														{conversation.last_message_date
-															? new Date(
-																	conversation.last_message_date * 1000
-															  ).toLocaleDateString()
-															: ""}
-													</div>
-												</li>
-											))
-										) : (
-											<div className='p-4 text-center text-gray-500'>
-												No conversations found
-											</div>
-										)}
-									</ul>
-								)}
-							</div>
-						</div>
-
-						{/* Main Content */}
-						<div className='flex-1 flex flex-col overflow-hidden'>
-							{/* Top Bar */}
-							<div className='p-4 border-b border-gray-200 bg-white'>
-								<h2 className='text-xl font-semibold text-gray-800'>
-									{selectedConversation
-										? (() => {
-												const conversation = conversations.find(
-													(c) => c.id === selectedConversation
-												)
-												if (!conversation) return "Conversation"
-												return (
-													conversationTitles[selectedConversation] ||
-													conversation.name ||
-													"Conversation"
-												)
-										  })()
-										: searchResults
-										? `Search Results (${searchResults.total_count})`
-										: "Select a conversation"}
-								</h2>
-							</div>
-
-							{/* Messages Area - add ref here */}
-							<div
-								ref={messagesContainerRef}
-								className='flex-1 overflow-y-auto p-4 bg-gray-50'
-							>
-								{loading ? (
-									<div className='flex justify-center items-center h-full'>
-										<div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500'></div>
-									</div>
-								) : searchResultsWithContactNames ? (
-									// Search Results
-									<div className='space-y-4'>
-										{searchResultsWithContactNames.messages.length > 0 ? (
-											searchResultsWithContactNames.messages.map((message) => (
-												<div
-													key={message.id}
-													className='border border-gray-200 rounded-lg p-4 bg-white'
-												>
-													<div
-														className={`max-w-full rounded-lg px-4 py-2 ${
-															message.is_from_me
-																? "bg-blue-100 text-blue-800"
-																: "bg-gray-100 text-gray-800"
-														}`}
-													>
-														{!message.is_from_me &&
-															(message.contact_name || message.sender_name) && (
-																<div className='text-xs font-medium text-gray-600 mb-1'>
-																	{message.contact_name || message.sender_name}
-																</div>
-															)}
-														<div className='text-sm'>{message.text}</div>
-														<div className='text-xs mt-1 text-gray-500'>
-															{new Date(message.date * 1000).toLocaleString()}
-														</div>
-													</div>
-													{message.chat_id && (
-														<button
-															onClick={() =>
-																jumpToConversation(message.chat_id!)
-															}
-															className='mt-2 text-sm text-blue-600 hover:underline'
-														>
-															Go to conversation
-														</button>
-													)}
-												</div>
-											))
-										) : (
-											<div className='flex justify-center items-center h-full'>
-												<p className='text-gray-500'>
-													No messages found containing "{searchQuery}"
-												</p>
-											</div>
-										)}
-									</div>
-								) : selectedConversation ? (
-									// Regular conversation view
-									messagesWithContactNames.length ? (
-										<div className='space-y-4'>
-											{messagesWithContactNames.map((message) => (
-												<div
-													key={message.id}
-													className={`flex ${
-														message.is_from_me ? "justify-end" : "justify-start"
-													}`}
-												>
-													<div
-														className={`max-w-xs md:max-w-md rounded-lg px-4 py-2 ${
-															message.is_from_me
-																? "bg-blue-500 text-white rounded-br-none"
-																: "bg-gray-200 text-gray-800 rounded-bl-none"
-														}`}
-													>
-														{!message.is_from_me &&
-															(message.contact_name || message.sender_name) && (
-																<div className='text-xs font-medium text-gray-600 mb-1'>
-																	{message.contact_name || message.sender_name}
-																</div>
-															)}
-														<div className='text-sm'>{message.text}</div>
-														<div className='text-xs text-right mt-1 opacity-70'>
-															{new Date(message.date * 1000).toLocaleTimeString(
-																[],
-																{
-																	hour: "2-digit",
-																	minute: "2-digit",
-																}
-															)}
-														</div>
-													</div>
-												</div>
-											))}
-										</div>
-									) : (
-										<div className='flex justify-center items-center h-full'>
-											<p className='text-gray-500'>
-												No messages in this conversation
-											</p>
-										</div>
+					<AdvancedSearch
+						onSearch={handleSearch}
+						contactMap={contactMap}
+						conversations={conversations.map((conv) => ({
+							id: conv.id,
+							name: conversationTitles[conv.id] || conv.name || "Conversation",
+							participants:
+								messagesByConversation[conv.id]
+									?.filter(
+										(msg) =>
+											!msg.is_from_me && (msg.contact_name || msg.sender_name)
 									)
-								) : (
-									<div className='flex justify-center items-center h-full'>
-										<p className='text-gray-500'>
-											Search for messages or select a conversation
-										</p>
-									</div>
-								)}
-							</div>
+									?.map((msg) => ({
+										id: msg.sender_name || msg.contact_name || "",
+										name: msg.contact_name || msg.sender_name || "",
+										type: "contact" as const,
+									}))
+									?.filter(
+										(participant, index, self) =>
+											index === self.findIndex((p) => p.id === participant.id)
+									) || [],
+						}))}
+					/>
+
+					<div className='flex flex-1 flex-col'>
+						<div className='p-4 border-b border-border flex items-center justify-between'>
+							<h2 className='font-medium'>Search Results</h2>
+							<Badge variant='outline'>
+								{searchResults?.messages.length || 0} messages
+							</Badge>
 						</div>
+						<MessagesView
+							loading={loading}
+							searchResultsWithContactNames={searchResultsWithContactNames}
+						/>
 					</div>
 				</>
 			)}

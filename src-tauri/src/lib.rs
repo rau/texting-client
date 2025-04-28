@@ -870,7 +870,7 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
         params.push(Box::new(apple_end));
     }
     
-    // Add sender filters if provided
+    // Add sender filters if provided - now handling multiple senders with OR logic
     if !sender_filters.is_empty() {
         sql.push_str(" AND (");
         let mut first = true;
@@ -888,24 +888,24 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                 // For phone numbers, search with wildcard to handle different formats
                 let numeric_only: String = sender.chars().filter(|c| c.is_digit(10)).collect();
                 if !numeric_only.is_empty() {
-                    sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                    sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
                     let pattern = format!("%{}%", numeric_only);
                     params.push(Box::new(pattern.clone()));
                     params.push(Box::new(pattern));
                 } else {
-                    sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                    sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
                     let pattern = format!("%{}%", sender);
                     params.push(Box::new(pattern.clone()));
                     params.push(Box::new(pattern));
                 }
             } else if sender.contains('@') {
                 // For emails, do exact match (case insensitive)
-                sql.push_str("LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?)");
+                sql.push_str("(LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?))");
                 params.push(Box::new(sender.clone()));
                 params.push(Box::new(sender));
             } else {
                 // For names or other identifiers, use LIKE
-                sql.push_str("h.id LIKE ? OR h.uncanonicalized_id LIKE ?");
+                sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
                 let pattern = format!("%{}%", sender);
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
