@@ -7,6 +7,9 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import Loader from "./components/Loader"
 import { Badge } from "./components/ui/badge"
 
+// Utility function to strip non-numeric characters
+const stripNonNumeric = (str: string): string => str.replace(/\D/g, "")
+
 function App() {
 	const [conversations, setConversations] = useState<Conversation[]>([])
 	const [messagesByConversation, setMessagesByConversation] = useState<
@@ -25,91 +28,87 @@ function App() {
 		Record<string, string>
 	>({})
 
-	console.log(contactMap)
-
 	// Parse contacts data into a usable map when contactsData changes
 	useEffect(() => {
 		if (!contactsData) return
 
-		const parseContactsData = () => {
-			const lines = contactsData.split("\n")
-			const summaryEndIndex = lines.findIndex((line) => line === "")
-			const contactLines = lines
-				.slice(summaryEndIndex + 1)
-				.filter((line) => line.trim() !== "")
+		const lines = contactsData.split("\n")
+		const summaryEndIndex = lines.findIndex((line) => line === "")
+		const contactLines = lines
+			.slice(summaryEndIndex + 1)
+			.filter((line) => line.trim() !== "")
 
-			const newContactMap: ContactMap = {
-				byId: {},
-				byPhone: {},
-				byEmail: {},
-			}
-
-			contactLines.forEach((line) => {
-				// Process contact entries
-				if (line.includes("Contact [ID:")) {
-					const idMatch = line.match(/Contact \[ID: (\d+)\]/)
-					if (idMatch && idMatch[1]) {
-						const id = idMatch[1]
-						const name = line.replace(/Contact \[ID: \d+\]: /, "").trim()
-
-						if (name && name !== "<No Name>") {
-							newContactMap.byId[id] = {
-								id,
-								name,
-								type: "contact",
-							}
-						}
-					}
-				}
-				// Process email entries
-				else if (line.includes("Email [ID:")) {
-					const match = line.match(/Email \[ID: (\d+)\] (.*?): (.*)/)
-					if (match && match[1] && match[3]) {
-						const id = match[1]
-						const name = match[2].trim()
-						const email = match[3].trim()
-
-						if (email) {
-							const contactInfo = {
-								id,
-								name: name !== "<No Name>" ? name : email,
-								type: "email" as const,
-								value: email,
-							}
-
-							newContactMap.byId[id] = contactInfo
-							newContactMap.byEmail[email] = contactInfo
-						}
-					}
-				}
-				// Process phone entries
-				else if (line.includes("Phone [ID:")) {
-					const match = line.match(/Phone \[ID: (\d+)\] (.*?): (.*)/)
-					if (match && match[1] && match[3]) {
-						const id = match[1]
-						const name = match[2].trim()
-						const phone = match[3].trim()
-
-						if (phone) {
-							const contactInfo = {
-								id,
-								name: name !== "<No Name>" ? name : phone,
-								type: "phone" as const,
-								value: phone,
-							}
-
-							newContactMap.byId[id] = contactInfo
-							newContactMap.byPhone[phone] = contactInfo
-						}
-					}
-				}
-			})
-
-			console.log("Parsed contact map:", newContactMap)
-			setContactMap(newContactMap)
+		const newContactMap: ContactMap = {
+			byId: {},
+			byPhone: {},
+			byEmail: {},
 		}
 
-		parseContactsData()
+		contactLines.forEach((line) => {
+			// Process contact entries
+			if (line.includes("Contact [ID:")) {
+				const idMatch = line.match(/Contact \[ID: (\d+)\]/)
+				if (idMatch && idMatch[1]) {
+					const id = idMatch[1]
+					const name = line.replace(/Contact \[ID: \d+\]: /, "").trim()
+
+					if (name && name !== "<No Name>") {
+						newContactMap.byId[id] = {
+							id,
+							name,
+							type: "contact",
+						}
+					}
+				}
+			}
+			// Process email entries
+			else if (line.includes("Email [ID:")) {
+				const match = line.match(/Email \[ID: (\d+)\] (.*?): (.*)/)
+				if (match && match[1] && match[3]) {
+					const id = match[1]
+					const name = match[2].trim()
+					const email = match[3].trim()
+
+					if (email) {
+						const contactInfo = {
+							id,
+							name: name !== "<No Name>" ? name : email,
+							type: "email" as const,
+							value: email,
+						}
+
+						newContactMap.byId[id] = contactInfo
+						newContactMap.byEmail[email.toLowerCase()] = contactInfo
+					}
+				}
+			}
+			// Process phone entries
+			else if (line.includes("Phone [ID:")) {
+				const match = line.match(/Phone \[ID: (\d+)\] (.*?): (.*)/)
+				if (match && match[1] && match[3]) {
+					const id = match[1]
+					const name = match[2].trim()
+					const phone = match[3].trim()
+
+					if (phone) {
+						const strippedPhone = stripNonNumeric(phone)
+						const contactInfo = {
+							id,
+							name: name !== "<No Name>" ? name : phone,
+							type: "phone" as const,
+							value: strippedPhone,
+							rawValue: phone, // Keep the original format for display
+						}
+
+						newContactMap.byId[id] = contactInfo
+						newContactMap.byPhone[strippedPhone] = contactInfo
+					}
+				}
+			}
+		})
+
+		console.log("Parsed contact map:", newContactMap)
+		setContactMap(newContactMap)
 	}, [contactsData])
 
 	// Function to match a sender ID with a contact name
@@ -118,37 +117,32 @@ function App() {
 	): string | undefined => {
 		if (!senderId) return undefined
 
-		// Try direct match first (this will catch emails and exact phone matches)
-		if (contactMap.byPhone[senderId]) {
-			return contactMap.byPhone[senderId].name
-		}
-		if (contactMap.byEmail[senderId]) {
-			return contactMap.byEmail[senderId].name
-		}
-
-		// Try to match with email (case insensitive)
+		// For email addresses
 		if (senderId.includes("@")) {
 			const lowerEmail = senderId.toLowerCase()
 			if (contactMap.byEmail[lowerEmail]) {
 				return contactMap.byEmail[lowerEmail].name
 			}
+			return undefined
 		}
 
-		// Try to match with phone number by checking all formats
-		const phoneContacts = Object.entries(contactMap.byPhone)
-		for (const [storedNumber, contact] of phoneContacts) {
-			// Remove all non-digits from both numbers for comparison
-			const normalizedStored = storedNumber.replace(/\D/g, "")
-			const normalizedSender = senderId.replace(/\D/g, "")
+		// For phone numbers, strip non-numeric characters and try to match
+		const strippedNumber = stripNonNumeric(senderId)
+		if (strippedNumber) {
+			// Direct match with stripped number
+			if (contactMap.byPhone[strippedNumber]) {
+				return contactMap.byPhone[strippedNumber].name
+			}
 
-			// Match if either the full numbers match or the last 10 digits match
-			if (
-				normalizedStored === normalizedSender ||
-				(normalizedStored.length >= 10 &&
-					normalizedSender.length >= 10 &&
-					normalizedStored.slice(-10) === normalizedSender.slice(-10))
-			) {
-				return contact.name
+			// Try matching last 10 digits if the number is longer
+			if (strippedNumber.length >= 10) {
+				const last10 = strippedNumber.slice(-10)
+				const matchingContact = Object.entries(contactMap.byPhone).find(
+					([phone]) => phone.endsWith(last10)
+				)
+				if (matchingContact) {
+					return matchingContact[1].name
+				}
 			}
 		}
 
@@ -174,10 +168,12 @@ function App() {
 	const searchResultsWithContactNames = useMemo(() => {
 		if (!searchResults) return null
 
+		console.log("preUpdatedMessages", searchResults.messages)
+
 		const updatedMessages = applyContactNamesToMessages(searchResults.messages)
 
+		console.log("updatedMessages", updatedMessages)
 		return {
-			...searchResults,
 			messages: updatedMessages,
 		}
 	}, [searchResults, contactMap])
@@ -429,7 +425,7 @@ function App() {
 						</div>
 						<MessagesView
 							loading={loading}
-							searchResultsWithContactNames={searchResultsWithContactNames}
+							messages={searchResultsWithContactNames?.messages || []}
 						/>
 					</div>
 				</>

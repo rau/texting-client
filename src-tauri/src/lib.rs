@@ -409,11 +409,16 @@ async fn read_contacts() -> Result<String, AppError> {
                     let name: String = row.get(1)?;
                     let phone: String = row.get(2)?;
                     
+                    // Strip out anything that's not a number from the phone
+                    let clean_phone: String = phone.chars()
+                        .filter(|c| c.is_ascii_digit())
+                        .collect();
+                    
                     let contact_info = format!(
                         "Phone [ID: {}] {}: {}", 
                         contact_id, 
                         if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
-                        phone
+                        clean_phone // Use the cleaned phone number
                     );
                     
                     phone_count += 1;
@@ -497,11 +502,16 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     let query = r#"
         SELECT 
             c.ROWID as chat_id, 
-            c.display_name, 
+            c.display_name,
+            h.id as handle_id,
             m.text as last_message,
             MAX(m.date) as last_message_date
         FROM 
             chat c
+        LEFT JOIN 
+            chat_handle_join chj ON c.ROWID = chj.chat_id
+        LEFT JOIN 
+            handle h ON chj.handle_id = h.ROWID
         LEFT JOIN 
             chat_message_join cmj ON c.ROWID = cmj.chat_id
         LEFT JOIN 
@@ -519,19 +529,40 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     let conversation_iter = stmt.query_map([], |row| {
         let chat_id: i64 = row.get(0)?;
         let display_name: Option<String> = row.get(1)?;
-        let last_message: Option<String> = row.get(2)?;
+        let handle_id: Option<String> = row.get(2)?;
+        let last_message: Option<String> = row.get(3)?;
         
         // Handle the date separately to avoid NULL issues
-        let last_message_date: Result<i64, rusqlite::Error> = row.get(3);
+        let last_message_date: Result<i64, rusqlite::Error> = row.get(4);
         let last_message_date = match last_message_date {
             Ok(date) if date > 0 => apple_time_to_unix(date / 1_000_000_000),
             _ => 0, // Default to 0 for NULL or invalid dates
         };
         
+        // Clean up the display name or handle_id if it's a phone number
+        let name = match (display_name, handle_id) {
+            (Some(dname), _) => {
+                // If display_name exists and looks like a phone number, clean it
+                if dname.chars().any(|c| c.is_ascii_digit()) {
+                    Some(dname.chars().filter(|c| c.is_ascii_digit()).collect())
+                } else {
+                    Some(dname)
+                }
+            },
+            (None, Some(hid)) => {
+                // If handle_id exists and looks like a phone number, clean it
+                if hid.chars().any(|c| c.is_ascii_digit()) {
+                    Some(hid.chars().filter(|c| c.is_ascii_digit()).collect())
+                } else {
+                    Some(hid)
+                }
+            },
+            (None, None) => None,
+        };
         
         Ok(Conversation {
             id: chat_id.to_string(),
-            name: display_name,
+            name,
             last_message,
             last_message_date,
         })
@@ -552,10 +583,15 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         println!("No conversations found, trying simpler query...");
         let simple_query = r#"
             SELECT 
-                ROWID as chat_id, 
-                display_name
+                c.ROWID as chat_id, 
+                c.display_name,
+                h.id as handle_id
             FROM 
-                chat
+                chat c
+            LEFT JOIN 
+                chat_handle_join chj ON c.ROWID = chj.chat_id
+            LEFT JOIN 
+                handle h ON chj.handle_id = h.ROWID
             LIMIT 100
         "#;
         
@@ -565,12 +601,34 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         let simple_iter = simple_stmt.query_map([], |row| {
             let chat_id: i64 = row.get(0)?;
             let display_name: Option<String> = row.get(1)?;
+            let handle_id: Option<String> = row.get(2)?;
             
-            println!("Processing basic conversation: id={}, name={:?}", chat_id, display_name);
+            // Clean up the display name or handle_id if it's a phone number
+            let name = match (display_name, handle_id) {
+                (Some(dname), _) => {
+                    // If display_name exists and looks like a phone number, clean it
+                    if dname.chars().any(|c| c.is_ascii_digit()) {
+                        Some(dname.chars().filter(|c| c.is_ascii_digit()).collect())
+                    } else {
+                        Some(dname)
+                    }
+                },
+                (None, Some(hid)) => {
+                    // If handle_id exists and looks like a phone number, clean it
+                    if hid.chars().any(|c| c.is_ascii_digit()) {
+                        Some(hid.chars().filter(|c| c.is_ascii_digit()).collect())
+                    } else {
+                        Some(hid)
+                    }
+                },
+                (None, None) => None,
+            };
+            
+            println!("Found basic conversation: id={}, name={:?}", chat_id, name);
             
             Ok(Conversation {
                 id: chat_id.to_string(),
-                name: display_name,
+                name,
                 last_message: None,
                 last_message_date: 0,
             })
@@ -995,15 +1053,8 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
         let sender_id: Result<String, rusqlite::Error> = row.get(6);
         let sender_name = match sender_id {
             Ok(id) if !is_from_me => {
-                // Extract name from phone number or email formats
-                let name = if id.contains("@") {
-                    // It's an email - use part before @
-                    id.split('@').next().unwrap_or(&id).to_string()
-                } else {
-                    // Format phone number or just use the ID
-                    id
-                };
-                Some(name)
+               
+                Some(id)
             },
             _ => None, // No sender name for my messages or if sender_id is NULL
         };

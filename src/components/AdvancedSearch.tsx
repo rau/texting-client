@@ -30,11 +30,34 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
+// Utility function to format phone numbers
+const formatPhoneNumber = (phoneNumber: string): string => {
+	// Remove any non-numeric characters if they somehow exist
+	const cleaned = phoneNumber.replace(/\D/g, "")
+
+	// Format as (XXX) XXX-XXXX if it's a 10-digit number
+	if (cleaned.length === 10) {
+		return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`
+	}
+
+	// Format as +X (XXX) XXX-XXXX if it's 11 digits starting with 1
+	if (cleaned.length === 11 && cleaned.startsWith("1")) {
+		return `+${cleaned[0]} (${cleaned.slice(1, 4)}) ${cleaned.slice(
+			4,
+			7
+		)}-${cleaned.slice(7)}`
+	}
+
+	// Return as is if it doesn't match these patterns
+	return cleaned
+}
+
 type ContactInfo = {
 	id: string
 	name: string
 	type: "contact" | "email" | "phone"
 	value?: string
+	rawValue?: string // Store the raw (stripped) value for phone numbers
 }
 
 type ConversationInfo = {
@@ -75,11 +98,20 @@ export function AdvancedSearch({
 		selectedContacts: [],
 		selectedConversation: null,
 	})
+
 	// Collect all contacts from the contactMap and sort them alphabetically by name
 	const contacts = useMemo(() => {
 		return Object.values(contactMap.byId)
 			.filter((contact) => contact.name.trim() !== "") // Filter out empty names
 			.sort((a, b) => a.name.localeCompare(b.name))
+			.map((contact) => ({
+				...contact,
+				// Format phone numbers for display while keeping the raw value
+				value:
+					contact.type === "phone" && contact.value
+						? formatPhoneNumber(contact.value)
+						: contact.value,
+			}))
 	}, [contactMap])
 
 	return (
