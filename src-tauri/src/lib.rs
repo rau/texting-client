@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
 use std::fmt;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,9 +33,59 @@ pub struct SearchResult {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ContactPhoto {
-    full_photo: Option<Vec<u8>>,
-    thumbnail: Option<Vec<u8>>,
-    legacy_photo: Option<Vec<u8>>,
+    full_photo: Option<String>,  // Changed from Vec<u8> to String to store base64 with data URL
+    thumbnail: Option<String>,   // Changed from Vec<u8> to String
+    legacy_photo: Option<String>, // Changed from Vec<u8> to String
+}
+
+impl ContactPhoto {
+    fn is_valid_image_data(data: &[u8]) -> bool {
+        if data.len() < 4 {
+            return false;
+        }
+        
+        // Check if it's an actual image (not a reference)
+        if data[0] != 0x01 {
+            return false;
+        }
+        
+        // The actual image data starts after the first byte
+        let image_data = &data[1..];
+        
+        // Check for JPEG magic bytes
+        if image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return true;
+        }
+        
+        // Check for PNG magic bytes
+        if image_data.starts_with(&[0x89, 0x50, 0x4E]) {
+            return true;
+        }
+        
+        false
+    }
+
+    fn prepare_image_data(data: &[u8]) -> Option<String> {
+        if data.len() < 4 {
+            return None;
+        }
+
+        // Skip the first byte (0x01) to get raw image data
+        let image_data = &data[1..];
+        
+        // Determine image format and create appropriate data URL
+        let mime_type = if image_data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else if image_data.starts_with(&[0x89, 0x50, 0x4E]) {
+            "image/png"
+        } else {
+            return None;
+        };
+
+        // Create base64 string with data URL prefix
+        let base64_str = BASE64.encode(image_data);
+        Some(format!("data:{};base64,{}", mime_type, base64_str))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -153,7 +204,6 @@ fn apple_time_to_unix(apple_time: i64) -> i64 {
 fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
     // Check for the local AddressBook-v22.db file in the project root
     let current_dir = std::env::current_dir().map_err(AppError::IOError)?;
-    println!("Current directory: {:?}", current_dir);
     
     // Try multiple potential locations
     let potential_paths = vec![
@@ -172,63 +222,24 @@ fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
     
     // Try each potential path
     for path in &potential_paths {
-        println!("Checking for AddressBook at: {:?}", path);
         if path.exists() {
-            println!("FOUND LOCAL AddressBook-v22.db file at: {:?}", path);
             return Ok(path.clone());
         }
     }
     
-    println!("Could not find AddressBook-v22.db in any of the expected locations.");
-    
-    // Try to list files in current directory to debug
-    println!("Listing files in current directory:");
-    match std::fs::read_dir(&current_dir) {
-        Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    println!("  - {:?}", entry.path());
-                }
-            }
-        },
-        Err(e) => println!("Error reading directory: {:?}", e),
-    }
-    
-    // Also try to list files in parent directory
-    if let Some(parent_dir) = current_dir.parent() {
-        println!("Listing files in parent directory:");
-        match std::fs::read_dir(parent_dir) {
-            Ok(entries) => {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        println!("  - {:?}", entry.path());
-                    }
-                }
-            },
-            Err(e) => println!("Error reading parent directory: {:?}", e),
-        }
-    }
-    
     // Fallback to the macOS locations if the local file doesn't exist
-    println!("Fallback to macOS locations...");
     let home = dirs::home_dir().ok_or(AppError::OtherError("Home directory not found".to_string()))?;
     
     // Try the direct path first (older macOS)
     let direct_path = home.join("Library/Application Support/AddressBook/AddressBook-v22.abcddb");
     if direct_path.exists() {
-        println!("Found AddressBook at direct path: {:?}", direct_path);
-        println!("WARNING: Using system AddressBook instead of local file.");
-        
         // IMPORTANT: We're going to disable this path to force use of local file
-        println!("IMPORTANT: System AddressBook path is disabled. Please use local file.");
         return Err(AppError::OtherError("System AddressBook path is disabled. Please use local file.".to_string()));
     }
     
     // Try the Sources directory (newer macOS)
     let sources_dir = home.join("Library/Application Support/AddressBook/Sources");
     if sources_dir.exists() {
-        println!("Searching for AddressBook in Sources directory: {:?}", sources_dir);
-        
         // Read all subdirectories in Sources (UUIDs)
         let entries = fs::read_dir(&sources_dir).map_err(AppError::IOError)?;
         
@@ -241,33 +252,22 @@ fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
                 // Look for AddressBook-v22.abcddb in this UUID directory
                 let db_path = path.join("AddressBook-v22.abcddb");
                 if db_path.exists() {
-                    println!("Found AddressBook in Sources: {:?}", db_path);
-                    println!("WARNING: Using system AddressBook instead of local file.");
-                    
                     // IMPORTANT: We're going to disable this path to force use of local file
-                    println!("IMPORTANT: System AddressBook path is disabled. Please use local file.");
                     return Err(AppError::OtherError("System AddressBook path is disabled. Please use local file.".to_string()));
                 }
             }
         }
     }
     
-    println!("Could not find AddressBook database anywhere");
     Err(AppError::OtherError("AddressBook database not found. Please make sure AddressBook-v22.db exists in the project root directory.".to_string()))
 }
 
 // Read contacts from AddressBook database
 #[tauri::command]
 async fn read_contacts() -> Result<ContactResponse, AppError> {
-    println!("Attempting to read contacts from AddressBook...");
-    
     let db_path = match get_addressbook_db_path() {
-        Ok(path) => {
-            println!("Found AddressBook database at: {:?}", path);
-            path
-        },
+        Ok(path) => path,
         Err(e) => {
-            println!("Error finding AddressBook database: {:?}", e);
             return Ok(ContactResponse {
                 contacts: Vec::new(),
             });
@@ -275,12 +275,8 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
     };
     
     let conn = match Connection::open(&db_path) {
-        Ok(conn) => {
-            println!("Successfully opened AddressBook database connection");
-            conn
-        },
+        Ok(conn) => conn,
         Err(e) => {
-            println!("Error connecting to AddressBook database: {:?}", e);
             return Ok(ContactResponse {
                 contacts: Vec::new(),
             });
@@ -315,36 +311,49 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
         LIMIT 1000
     "#;
     
-    println!("Querying contact records...");
-    {
-        match conn.prepare(basic_query) {
-            Ok(mut stmt) => {
-                let rows = stmt.query_map([], |row| {
-                    let id: i64 = row.get(0)?;
-                    let first_name: Option<String> = row.get(1)?;
-                    let last_name: Option<String> = row.get(2)?;
-                    let nickname: Option<String> = row.get(3)?;
-                    let organization: Option<String> = row.get(4)?;
-                    let full_photo: Option<Vec<u8>> = row.get(5)?;
-                    let thumbnail: Option<Vec<u8>> = row.get(6)?;
+    match conn.prepare(basic_query) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let first_name: Option<String> = row.get(1)?;
+                let last_name: Option<String> = row.get(2)?;
+                let nickname: Option<String> = row.get(3)?;
+                let organization: Option<String> = row.get(4)?;
+                let full_photo: Option<Vec<u8>> = row.get(5)?;
+                let thumbnail: Option<Vec<u8>> = row.get(6)?;
+                
+                let name_parts = vec![
+                    first_name.as_deref(), 
+                    last_name.as_deref(),
+                    nickname.as_deref(),
+                    organization.as_deref()
+                ];
+                
+                let full_name = name_parts
+                    .into_iter()
+                    .filter_map(|p| p)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                
+                let photo_info = if let Some(ref full_data) = full_photo {
+                    let valid_full = ContactPhoto::is_valid_image_data(full_data);
+                    let valid_thumb = thumbnail
+                        .as_ref()
+                        .map(|t| ContactPhoto::is_valid_image_data(t))
+                        .unwrap_or(false);
                     
-                    let name_parts = vec![
-                        first_name.as_deref(), 
-                        last_name.as_deref(),
-                        nickname.as_deref(),
-                        organization.as_deref()
-                    ];
-                    
-                    let full_name = name_parts
-                        .into_iter()
-                        .filter_map(|p| p)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    
-                    let photo_info = if full_photo.is_some() || thumbnail.is_some() {
+                    if valid_full || valid_thumb {
                         let photo_data = ContactPhoto {
-                            full_photo,
-                            thumbnail,
+                            full_photo: if valid_full { 
+                                ContactPhoto::prepare_image_data(full_data)
+                            } else { 
+                                None 
+                            },
+                            thumbnail: if valid_thumb { 
+                                thumbnail.as_ref().and_then(|t| ContactPhoto::prepare_image_data(t))
+                            } else { 
+                                None 
+                            },
                             legacy_photo: None,
                         };
                         
@@ -362,7 +371,7 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
                         
                         format!(", Has Photo: yes")
                     } else {
-                        // Store in contact_map without photo
+                        // Store in contact_map without photo since neither is valid image data
                         contact_map.entry(id).or_insert(ContactInfo {
                             contact_id: id,
                             first_name: first_name.clone(),
@@ -374,34 +383,47 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
                             phones: Vec::new(),
                         });
                         
-                        format!(", Has Photo: no")
-                    };
+                        format!(", Has Photo: no (reference only)")
+                    }
+                } else {
+                    // Store in contact_map without photo
+                    contact_map.entry(id).or_insert(ContactInfo {
+                        contact_id: id,
+                        first_name: first_name.clone(),
+                        last_name: last_name.clone(),
+                        nickname: nickname.clone(),
+                        organization: organization.clone(),
+                        photo: None,
+                        emails: Vec::new(),
+                        phones: Vec::new(),
+                    });
                     
-                    let contact_info = if full_name.is_empty() {
-                        format!("Contact [ID: {}]: <No Name>{}", id, photo_info)
-                    } else {
-                        format!("Contact [ID: {}]: {}{}", id, full_name, photo_info)
-                    };
-                    
-                    contact_count += 1;
-                    
-                    Ok(contact_info)
-                });
+                    format!(", Has Photo: no")
+                };
                 
-                match rows {
-                    Ok(rows) => {
-                        for row in rows {
-                            match row {
-                                Ok(contact) => text_output.push(contact),
-                                Err(e) => println!("Error processing contact: {:?}", e),
-                            }
+                let contact_info = if full_name.is_empty() {
+                    format!("Contact [ID: {}]: <No Name>{}", id, photo_info)
+                } else {
+                    format!("Contact [ID: {}]: {}{}", id, full_name, photo_info)
+                };
+                
+                contact_count += 1;
+                
+                Ok(contact_info)
+            });
+            
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        if let Ok(contact) = row {
+                            text_output.push(contact);
                         }
-                    },
-                    Err(e) => println!("Error querying contacts: {:?}", e),
-                }
-            },
-            Err(e) => println!("Error preparing contact query: {:?}", e),
-        }
+                    }
+                },
+                Err(_) => {}
+            }
+        },
+        Err(_) => {}
     }
     
     // Also check for legacy photos in ZABCDLIKENESS
@@ -416,45 +438,41 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
         LIMIT 1000
     "#;
     
-    println!("Querying legacy photos...");
-    {
-        match conn.prepare(legacy_query) {
-            Ok(mut stmt) => {
-                let rows = stmt.query_map([], |row| {
-                    let id: i64 = row.get(0)?;
-                    let legacy_photo: Option<Vec<u8>> = row.get(1)?;
-                    
-                    // Update contact_map with legacy photo
-                    if let Some(contact) = contact_map.get_mut(&id) {
-                        if let Some(photo) = &mut contact.photo {
-                            photo.legacy_photo = legacy_photo;
-                        } else {
-                            contact.photo = Some(ContactPhoto {
-                                full_photo: None,
-                                thumbnail: None,
-                                legacy_photo,
-                            });
+    match conn.prepare(legacy_query) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let legacy_photo: Option<Vec<u8>> = row.get(1)?;
+                
+                // Update contact_map with legacy photo
+                if let Some(contact) = contact_map.get_mut(&id) {
+                    if let Some(photo) = &mut contact.photo {
+                        photo.legacy_photo = legacy_photo.map(|data| ContactPhoto::prepare_image_data(&data).unwrap_or_default());
+                    } else {
+                        contact.photo = Some(ContactPhoto {
+                            full_photo: None,
+                            thumbnail: None,
+                            legacy_photo: legacy_photo.map(|data| ContactPhoto::prepare_image_data(&data).unwrap_or_default()),
+                        });
+                    }
+                }
+                
+                let contact_info = format!("Contact [ID: {}]: Has Legacy Photo", id);
+                Ok(contact_info)
+            });
+            
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        if let Ok(contact) = row {
+                            text_output.push(contact);
                         }
                     }
-                    
-                    let contact_info = format!("Contact [ID: {}]: Has Legacy Photo", id);
-                    Ok(contact_info)
-                });
-                
-                match rows {
-                    Ok(rows) => {
-                        for row in rows {
-                            match row {
-                                Ok(contact) => text_output.push(contact),
-                                Err(e) => println!("Error processing legacy photo: {:?}", e),
-                            }
-                        }
-                    },
-                    Err(e) => println!("Error querying legacy photos: {:?}", e),
-                }
-            },
-            Err(e) => println!("Error preparing legacy photo query: {:?}", e),
-        }
+                },
+                Err(_) => {}
+            }
+        },
+        Err(_) => {}
     }
     
     // Second query: Get email addresses joined with contact IDs
@@ -472,46 +490,42 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
         LIMIT 1000
     "#;
     
-    println!("Querying email addresses with contact names...");
-    {
-        match conn.prepare(email_query) {
-            Ok(mut stmt) => {
-                let rows = stmt.query_map([], |row| {
-                    let contact_id: i64 = row.get(0)?;
-                    let name: String = row.get(1)?;
-                    let email: String = row.get(2)?;
-                    
-                    // Update contact_map with email
-                    if let Some(contact) = contact_map.get_mut(&contact_id) {
-                        contact.emails.push(email.clone());
-                    }
-                    
-                    let contact_info = format!(
-                        "Email [ID: {}] {}: {}", 
-                        contact_id, 
-                        if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
-                        email
-                    );
-                    
-                    email_count += 1;
-                    
-                    Ok(contact_info)
-                });
+    match conn.prepare(email_query) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([], |row| {
+                let contact_id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                let email: String = row.get(2)?;
                 
-                match rows {
-                    Ok(rows) => {
-                        for row in rows {
-                            match row {
-                                Ok(contact) => text_output.push(contact),
-                                Err(e) => println!("Error processing email with contact: {:?}", e),
-                            }
-                        }
-                    },
-                    Err(e) => println!("Error querying emails with contacts: {:?}", e),
+                // Update contact_map with email
+                if let Some(contact) = contact_map.get_mut(&contact_id) {
+                    contact.emails.push(email.clone());
                 }
-            },
-            Err(e) => println!("Error preparing email with contact query: {:?}", e),
-        }
+                
+                let contact_info = format!(
+                    "Email [ID: {}] {}: {}", 
+                    contact_id, 
+                    if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
+                    email
+                );
+                
+                email_count += 1;
+                
+                Ok(contact_info)
+            });
+            
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        if let Ok(contact) = row {
+                            text_output.push(contact);
+                        }
+                    }
+                },
+                Err(_) => {}
+            }
+        },
+        Err(_) => {}
     }
     
     // Third query: Get phone numbers joined with contact IDs
@@ -529,51 +543,47 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
         LIMIT 1000
     "#;
     
-    println!("Querying phone numbers with contact names...");
-    {
-        match conn.prepare(phone_query) {
-            Ok(mut stmt) => {
-                let rows = stmt.query_map([], |row| {
-                    let contact_id: i64 = row.get(0)?;
-                    let name: String = row.get(1)?;
-                    let phone: String = row.get(2)?;
-                    
-                    // Strip out anything that's not a number from the phone
-                    let clean_phone: String = phone.chars()
-                        .filter(|c| c.is_ascii_digit())
-                        .collect();
-                    
-                    // Update contact_map with phone
-                    if let Some(contact) = contact_map.get_mut(&contact_id) {
-                        contact.phones.push(clean_phone.clone());
-                    }
-                    
-                    let contact_info = format!(
-                        "Phone [ID: {}] {}: {}", 
-                        contact_id, 
-                        if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
-                        clean_phone
-                    );
-                    
-                    phone_count += 1;
-                    
-                    Ok(contact_info)
-                });
+    match conn.prepare(phone_query) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([], |row| {
+                let contact_id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                let phone: String = row.get(2)?;
                 
-                match rows {
-                    Ok(rows) => {
-                        for row in rows {
-                            match row {
-                                Ok(contact) => text_output.push(contact),
-                                Err(e) => println!("Error processing phone with contact: {:?}", e),
-                            }
-                        }
-                    },
-                    Err(e) => println!("Error querying phones with contacts: {:?}", e),
+                // Strip out anything that's not a number from the phone
+                let clean_phone: String = phone.chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect();
+                
+                // Update contact_map with phone
+                if let Some(contact) = contact_map.get_mut(&contact_id) {
+                    contact.phones.push(clean_phone.clone());
                 }
-            },
-            Err(e) => println!("Error preparing phone with contact query: {:?}", e),
-        }
+                
+                let contact_info = format!(
+                    "Phone [ID: {}] {}: {}", 
+                    contact_id, 
+                    if name.trim().is_empty() { "<No Name>" } else { &name.trim() },
+                    clean_phone
+                );
+                
+                phone_count += 1;
+                
+                Ok(contact_info)
+            });
+            
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        if let Ok(contact) = row {
+                            text_output.push(contact);
+                        }
+                    }
+                },
+                Err(_) => {}
+            }
+        },
+        Err(_) => {}
     }
     
     if text_output.is_empty() {
@@ -606,31 +616,16 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
 // Tauri commands
 #[tauri::command]
 async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
-    println!("Attempting to fetch conversations...");
-    
     let db_path = match get_imessage_db_path() {
-        Ok(path) => {
-            println!("Found iMessage database at: {:?}", path);
-            path
-        },
-        Err(e) => {
-            println!("Error finding iMessage database: {:?}", e);
-            return Err(e);
-        }
+        Ok(path) => path,
+        Err(e) => return Err(e),
     };
     
     let conn = match Connection::open(&db_path) {
-        Ok(conn) => {
-            conn
-        },
-        Err(e) => {
-            println!("Error connecting to database: {:?}", e);
-            return Err(AppError::DatabaseConnectionError(e));
-        }
+        Ok(conn) => conn,
+        Err(e) => return Err(AppError::DatabaseConnectionError(e)),
     };
     
-    // Try a simpler query first to guarantee we get some results
-    println!("Preparing to query conversations...");
     let query = r#"
         SELECT 
             c.ROWID as chat_id, 
@@ -655,7 +650,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         LIMIT 100
     "#;
     
-    println!("Executing query: {}", query);
     let mut stmt = conn.prepare(query)?;
     
     let conversation_iter = stmt.query_map([], |row| {
@@ -702,17 +696,13 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     
     let mut conversations = Vec::new();
     for conversation in conversation_iter {
-        match conversation {
-            Ok(conv) => {
-                conversations.push(conv);
-            },
-            Err(e) => println!("Error processing conversation: {:?}", e),
+        if let Ok(conv) = conversation {
+            conversations.push(conv);
         }
     }
     
     // If we couldn't find any conversations, try an even simpler query
     if conversations.is_empty() {
-        println!("No conversations found, trying simpler query...");
         let simple_query = r#"
             SELECT 
                 c.ROWID as chat_id, 
@@ -727,7 +717,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
             LIMIT 100
         "#;
         
-        println!("Executing simpler query: {}", simple_query);
         let mut simple_stmt = conn.prepare(simple_query)?;
         
         let simple_iter = simple_stmt.query_map([], |row| {
@@ -756,8 +745,6 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
                 (None, None) => None,
             };
             
-            println!("Found basic conversation: id={}, name={:?}", chat_id, name);
-            
             Ok(Conversation {
                 id: chat_id.to_string(),
                 name,
@@ -767,17 +754,12 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         })?;
         
         for conversation in simple_iter {
-            match conversation {
-                Ok(conv) => {
-                    println!("Found basic conversation: id={}, name={:?}", conv.id, conv.name);
-                    conversations.push(conv);
-                },
-                Err(e) => println!("Error processing basic conversation: {:?}", e),
+            if let Ok(conv) = conversation {
+                conversations.push(conv);
             }
         }
     }
     
-    println!("Total conversations found: {}", conversations.len());
     Ok(conversations)
 }
 
@@ -880,8 +862,6 @@ impl rusqlite::ToSql for SqlParam {
 
 #[tauri::command]
 async fn search_messages(query: String) -> Result<SearchResult, AppError> {
-    println!("Searching for messages containing: {}", query);
-    
     // Parse advanced search parameters
     let mut text_query = String::new();
     let mut start_timestamp: Option<i64> = None;
@@ -918,14 +898,12 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                         if let Some(timestamp_str) = part.strip_prefix("AFTER:") {
                             if let Ok(timestamp) = timestamp_str.parse::<i64>() {
                                 start_timestamp = Some(timestamp);
-                                println!("Parsed start timestamp: {}", timestamp);
                             }
                         }
                     } else if part.starts_with("BEFORE:") {
                         if let Some(timestamp_str) = part.strip_prefix("BEFORE:") {
                             if let Ok(timestamp) = timestamp_str.parse::<i64>() {
                                 end_timestamp = Some(timestamp);
-                                println!("Parsed end timestamp: {}", timestamp);
                             }
                         }
                     } else if part.starts_with("FROM:") {
@@ -936,7 +914,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                             } else {
                                 sender.to_string()
                             };
-                            println!("Parsed sender filter: {}", clean_sender);
                             sender_filters.push(clean_sender);
                         }
                     } else if part.starts_with("CONVERSATION:") {
@@ -947,7 +924,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                             } else {
                                 conv_id.to_string()
                             };
-                            println!("Parsed conversation filter: {}", clean_id);
                             conversation_id = Some(clean_id);
                         }
                     } else if !in_parentheses { // Only add to text query if not in parentheses
@@ -987,7 +963,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                 } else {
                     sender.to_string()
                 };
-                println!("Parsed sender filter: {}", clean_sender);
                 sender_filters.push(clean_sender);
             }
         } else if part.starts_with("CONVERSATION:") {
@@ -997,7 +972,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                 } else {
                     conv_id.to_string()
                 };
-                println!("Parsed conversation filter: {}", clean_id);
                 conversation_id = Some(clean_id);
             }
         } else if !part.starts_with("AFTER:") && !part.starts_with("BEFORE:") && !in_parentheses {
@@ -1007,9 +981,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             text_query.push_str(&part);
         }
     }
-    
-    println!("Parsed text query: {:?}", text_query);
-    println!("Parsed sender filters: {:?}", sender_filters);
     
     // If text query is empty after parsing special commands, search for all messages
     if text_query.is_empty() {
@@ -1122,34 +1093,6 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     
     // Add ordering and limit
     sql.push_str(" ORDER BY m.date DESC LIMIT 500");
-    
-    // Print the complete SQL query with parameter values for debugging
-    println!("Executing SQL query:");
-    println!("{}", sql);
-    println!("\nQuery parameters:");
-    for param in &params {
-        match param.to_sql() {
-            Ok(rusqlite::types::ToSqlOutput::Owned(value)) => {
-                match value {
-                    rusqlite::types::Value::Text(s) => println!("  Value: '{}'", s),
-                    rusqlite::types::Value::Integer(i) => println!("  Value: {}", i),
-                    rusqlite::types::Value::Real(f) => println!("  Value: {}", f),
-                    rusqlite::types::Value::Blob(b) => println!("  Value: <blob of length {}>", b.len()),
-                    rusqlite::types::Value::Null => println!("  Value: NULL"),
-                }
-            },
-            Ok(rusqlite::types::ToSqlOutput::Borrowed(value)) => {
-                match value {
-                    rusqlite::types::ValueRef::Text(s) => println!("  Value: '{}'", String::from_utf8_lossy(s)),
-                    rusqlite::types::ValueRef::Integer(i) => println!("  Value: {}", i),
-                    rusqlite::types::ValueRef::Real(f) => println!("  Value: {}", f),
-                    rusqlite::types::ValueRef::Blob(b) => println!("  Value: <blob of length {}>", b.len()),
-                    rusqlite::types::ValueRef::Null => println!("  Value: NULL"),
-                }
-            },
-            _ => println!("  Value: <unknown>"),
-        }
-    }
     
     let mut stmt = conn.prepare(&sql)?;
     

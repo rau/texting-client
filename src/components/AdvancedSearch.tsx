@@ -19,6 +19,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { Contact } from "@/types"
 import { format } from "date-fns"
@@ -31,10 +32,16 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
+type ConversationParticipant = {
+	id: string
+	name: string
+	type: "contact"
+}
+
 type ConversationInfo = {
 	id: string
 	name: string
-	participants: Contact[]
+	participants: ConversationParticipant[]
 }
 
 type AdvancedSearchProps = {
@@ -49,6 +56,7 @@ export type SearchParams = {
 	endDate: Date | undefined
 	selectedContacts: Contact[]
 	selectedConversation: ConversationInfo | null
+	showOnlyMyMessages: boolean
 }
 
 export function AdvancedSearch({
@@ -62,6 +70,7 @@ export function AdvancedSearch({
 		endDate: undefined,
 		selectedContacts: [],
 		selectedConversation: null,
+		showOnlyMyMessages: false,
 	})
 
 	// Collect all contacts from the contactMap and sort them alphabetically by name
@@ -98,6 +107,29 @@ export function AdvancedSearch({
 									return newParams
 								})
 							}
+						/>
+					</div>
+				</div>
+
+				{/* Show Only My Messages Toggle */}
+				<div className='space-y-2 mb-4'>
+					<div className='flex items-center justify-between'>
+						<Label htmlFor='show-my-messages' className='text-sm font-medium'>
+							Show Only My Messages
+						</Label>
+						<Switch
+							id='show-my-messages'
+							checked={searchParams.showOnlyMyMessages}
+							onCheckedChange={(checked) => {
+								setSearchParams((prev) => {
+									const newParams = {
+										...prev,
+										showOnlyMyMessages: checked,
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}}
 						/>
 					</div>
 				</div>
@@ -215,6 +247,7 @@ export function AdvancedSearch({
 											<CommandItem
 												key={contact.contact_id}
 												onSelect={() => {
+													console.log("contact", contact)
 													setSearchParams((prev) => {
 														const isAlreadySelected =
 															prev.selectedContacts.some(
@@ -229,7 +262,6 @@ export function AdvancedSearch({
 															...prev,
 															selectedContacts: newContacts,
 														}
-														console.log("newParams", newParams)
 														onSearch(newParams)
 														return newParams
 													})
@@ -240,15 +272,9 @@ export function AdvancedSearch({
 													<Avatar className='h-8 w-8'>
 														<AvatarImage
 															src={
-																contact.photo?.full_photo
-																	? `data:image/jpeg;base64,${btoa(
-																			String.fromCharCode(
-																				...new Uint8Array(
-																					contact.photo.full_photo
-																				)
-																			)
-																	  )}`
-																	: "/placeholder.svg"
+																contact.photo?.full_photo ||
+																contact.photo?.thumbnail ||
+																undefined
 															}
 														/>
 														<AvatarFallback>
@@ -296,16 +322,12 @@ export function AdvancedSearch({
 							>
 								<Avatar className='h-5 w-5 mr-1'>
 									<AvatarImage
-										src={
-											contact.photo?.thumbnail
-												? `data:image/jpeg;base64,${btoa(
-														String.fromCharCode(
-															...new Uint8Array(contact.photo.thumbnail)
-														)
-												  )}`
-												: "/placeholder.svg"
-										}
 										alt={contact.first_name}
+										src={
+											contact.photo?.thumbnail ||
+											contact.photo?.full_photo ||
+											""
+										}
 									/>
 									<AvatarFallback className='text-[10px]'>
 										{contact.first_name
@@ -318,7 +340,7 @@ export function AdvancedSearch({
 								<Button
 									variant='ghost'
 									size='icon'
-									className='h-4 w-4 ml-1 p-0'
+									className='h-4 w-4 ml-1 p-0 hover:cursor-pointer hover:bg-transparent'
 									onClick={() => {
 										setSearchParams((prev) => {
 											const newParams = {

@@ -22,6 +22,7 @@ function App() {
 	const [conversationTitles, setConversationTitles] = useState<
 		Record<string, string>
 	>({})
+	const [searchParams, setSearchParams] = useState<SearchParams | null>(null)
 
 	// Parse contacts data into a usable map when contactsData changes
 
@@ -83,15 +84,17 @@ function App() {
 	const searchResultsWithContactNames = useMemo(() => {
 		if (!searchResults) return null
 
-		console.log("preUpdatedMessages", searchResults.messages)
+		let updatedMessages = applyContactNamesToMessages(searchResults.messages)
 
-		const updatedMessages = applyContactNamesToMessages(searchResults.messages)
+		// Filter messages if showOnlyMyMessages is enabled
+		if (searchParams?.showOnlyMyMessages) {
+			updatedMessages = updatedMessages.filter((msg) => msg.is_from_me)
+		}
 
-		console.log("updatedMessages", updatedMessages)
 		return {
 			messages: updatedMessages,
 		}
-	}, [searchResults, contacts])
+	}, [searchResults, contacts, searchParams?.showOnlyMyMessages])
 
 	const generateConversationTitle = (
 		conversation: Conversation,
@@ -232,6 +235,7 @@ function App() {
 				const contacts = await invoke("read_contacts")
 				// @ts-ignore
 				const contactsJSON = contacts.contacts as Contact[]
+				console.log("contactsJSON", contactsJSON)
 				setContacts(contactsJSON)
 			} catch (error) {
 				console.error("Failed to load contacts:", error)
@@ -265,6 +269,9 @@ function App() {
 
 	const handleSearch = useCallback(
 		async (params: SearchParams) => {
+			// Store the search params for filtering
+			setSearchParams(params)
+
 			let query = params.query
 
 			// Add FROM: filters for selected contacts
@@ -272,7 +279,7 @@ function App() {
 				const fromQueries = params.selectedContacts.map((contact) => {
 					// Get all contacts with the same name
 					const relatedContacts =
-						contacts?.filter((c) => c.first_name === contact.name) || []
+						contacts?.filter((c) => c.first_name === contact.first_name) || []
 					// Create FROM: queries for each contact value
 					return relatedContacts.map((c) => `FROM:${c.phones[0]}`).join(" OR ")
 				})

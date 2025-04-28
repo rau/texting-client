@@ -32,7 +32,7 @@ export type Contact = {
 }
 
 export type ContactPhoto = {
-	full_photo: number[] | null
-	thumbnail: number[] | null
-	legacy_photo: number[] | null
+	full_photo: string | null
+	thumbnail: string | null
+	legacy_photo: string | null
 }
