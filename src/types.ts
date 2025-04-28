@@ -12,7 +12,7 @@ export type Message = {
 	is_from_me: boolean
 	chat_id?: string
 	sender_name?: string
-	contact_name?: string
+	contact?: Contact
 }
 
 export type SearchResult = {

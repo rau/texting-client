@@ -26,65 +26,57 @@ function App() {
 
 	// Parse contacts data into a usable map when contactsData changes
 
-	// Function to match a sender ID with a contact name
-	const getContactNameForSender = (
+	// Function to find a contact for a sender ID
+	const getContactForSender = (
 		senderId: string | undefined
-	): string | undefined => {
-		if (!senderId) return undefined
+	): Contact | undefined => {
+		if (!senderId || !contacts) return undefined
 
 		// For email addresses
 		if (senderId.includes("@")) {
 			const lowerEmail = senderId.toLowerCase()
-			if (contacts?.find((c) => c.emails.includes(lowerEmail))) {
-				return contacts?.find((c) => c.emails.includes(lowerEmail))?.first_name
-			}
-			return undefined
+			return contacts.find((c) => c.emails.includes(lowerEmail))
 		}
 
 		// For phone numbers, strip non-numeric characters and try to match
 		const strippedNumber = stripNonNumeric(senderId)
 		if (strippedNumber) {
 			// Direct match with stripped number
-			if (contacts?.find((c) => c.phones.includes(strippedNumber))) {
-				return contacts?.find((c) => c.phones.includes(strippedNumber))
-					?.first_name
-			}
+			const directMatch = contacts.find((c) =>
+				c.phones.includes(strippedNumber)
+			)
+			if (directMatch) return directMatch
 
 			// Try matching last 10 digits if the number is longer
 			if (strippedNumber.length >= 10) {
 				const last10 = strippedNumber.slice(-10)
-				const matchingContact = contacts?.find((c) =>
+				return contacts.find((c) =>
 					c.phones.some((phone) => phone.endsWith(last10))
 				)
-				if (matchingContact) {
-					return matchingContact.first_name
-				}
 			}
 		}
 
 		return undefined
 	}
 
-	// Apply contact names to a specific set of messages
-	const applyContactNamesToMessages = (
-		messagesToProcess: Message[]
-	): Message[] => {
+	// Apply contacts to a specific set of messages
+	const applyContactsToMessages = (messagesToProcess: Message[]): Message[] => {
 		return messagesToProcess.map((message) => {
 			if (!message.is_from_me && message.sender_name) {
-				const contactName = getContactNameForSender(message.sender_name)
-				if (contactName) {
-					return { ...message, contact_name: contactName }
+				const contact = getContactForSender(message.sender_name)
+				if (contact) {
+					return { ...message, contact }
 				}
 			}
 			return message
 		})
 	}
 
-	// Apply contact names to search results
-	const searchResultsWithContactNames = useMemo(() => {
+	// Apply contacts to search results
+	const searchResultsWithContacts = useMemo(() => {
 		if (!searchResults) return null
 
-		let updatedMessages = applyContactNamesToMessages(searchResults.messages)
+		let updatedMessages = applyContactsToMessages(searchResults.messages)
 
 		// Filter messages if showOnlyMyMessages is enabled
 		if (searchParams?.showOnlyMyMessages) {
@@ -93,6 +85,7 @@ function App() {
 
 		return {
 			messages: updatedMessages,
+			total_count: searchResults.total_count,
 		}
 	}, [searchResults, contacts, searchParams?.showOnlyMyMessages])
 
@@ -101,9 +94,9 @@ function App() {
 		messagesForConversation: Message[] = []
 	): string => {
 		if (conversation.name) {
-			const contactName = getContactNameForSender(conversation.name)
-			if (contactName) {
-				return contactName
+			const contact = getContactForSender(conversation.name)
+			if (contact) {
+				return contact.first_name
 			}
 			return conversation.name
 		}
@@ -112,8 +105,8 @@ function App() {
 		const participants = new Set<string>()
 		messagesForConversation.forEach((message) => {
 			if (!message.is_from_me && message.sender_name) {
-				const contactName = getContactNameForSender(message.sender_name)
-				participants.add(contactName || message.sender_name)
+				const contact = getContactForSender(message.sender_name)
+				participants.add(contact ? contact.first_name : message.sender_name)
 			}
 		})
 
@@ -162,7 +155,7 @@ function App() {
 						}))
 
 						// Process messages to get proper names
-						const messagesWithNames = applyContactNamesToMessages(messagesArray)
+						const messagesWithNames = applyContactsToMessages(messagesArray)
 						const title = generateConversationTitle(
 							conversation,
 							messagesWithNames
@@ -319,13 +312,10 @@ function App() {
 							name: conversationTitles[conv.id] || conv.name || "Conversation",
 							participants:
 								messagesByConversation[conv.id]
-									?.filter(
-										(msg) =>
-											!msg.is_from_me && (msg.contact_name || msg.sender_name)
-									)
+									?.filter((msg) => !msg.is_from_me && msg.sender_name)
 									?.map((msg) => ({
-										id: msg.sender_name || msg.contact_name || "",
-										name: msg.contact_name || msg.sender_name || "",
+										id: msg.sender_name || "",
+										name: msg.contact?.first_name || msg.sender_name || "",
 										type: "contact" as const,
 									}))
 									?.filter(
@@ -344,7 +334,7 @@ function App() {
 						</div>
 						<MessagesView
 							loading={loading}
-							messages={searchResultsWithContactNames?.messages || []}
+							messages={searchResultsWithContacts?.messages || []}
 						/>
 					</div>
 				</>
