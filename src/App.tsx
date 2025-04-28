@@ -1,5 +1,5 @@
+import { AdvancedSearch, SearchParams } from "@/components/AdvancedSearch"
 import { MessagesView } from "@/components/MessagesView"
-import { AdvancedSearch, SearchParams } from "@/components/ui/advanced-search"
 import { ContactMap, Conversation, Message, SearchResult } from "@/types"
 import { invoke } from "@tauri-apps/api/core"
 import { format } from "date-fns"
@@ -9,21 +9,13 @@ import { Badge } from "./components/ui/badge"
 
 function App() {
 	const [conversations, setConversations] = useState<Conversation[]>([])
-	const [selectedConversation, setSelectedConversation] = useState<
-		string | null
-	>(null)
-	const [messages, setMessages] = useState<Message[]>([])
 	const [messagesByConversation, setMessagesByConversation] = useState<
 		Record<string, Message[]>
 	>({})
 	const [loading, setLoading] = useState<boolean>(true)
 	const [contactsLoading, setContactsLoading] = useState<boolean>(true)
-	const [error, setError] = useState<string | null>(null)
-	const [searchQuery, setSearchQuery] = useState<string>("")
 	const [searchResults, setSearchResults] = useState<SearchResult | null>(null)
-	const [isSearching, setIsSearching] = useState<boolean>(false)
 	const [contactsData, setContactsData] = useState<string | null>(null)
-
 	const [contactMap, setContactMap] = useState<ContactMap>({
 		byId: {},
 		byPhone: {},
@@ -32,6 +24,8 @@ function App() {
 	const [conversationTitles, setConversationTitles] = useState<
 		Record<string, string>
 	>({})
+
+	console.log(contactMap)
 
 	// Parse contacts data into a usable map when contactsData changes
 	useEffect(() => {
@@ -188,12 +182,10 @@ function App() {
 		}
 	}, [searchResults, contactMap])
 
-	// Add a function to generate conversation titles
 	const generateConversationTitle = (
 		conversation: Conversation,
 		messagesForConversation: Message[] = []
 	): string => {
-		// If conversation already has a name, use it
 		if (conversation.name) {
 			const contactName = getContactNameForSender(conversation.name)
 			if (contactName) {
@@ -291,7 +283,6 @@ function App() {
 		const loadConversations = async () => {
 			try {
 				setLoading(true)
-				setError(null)
 				// This will be implemented in Rust to safely access the SQLite DB
 				const fetchedConversations = await invoke("get_conversations")
 				console.log("Fetched conversations:", fetchedConversations)
@@ -318,9 +309,6 @@ function App() {
 				)
 			} catch (error) {
 				console.error("Failed to load conversations:", error)
-				setError(
-					"Failed to load conversations. You may need to grant access to the Messages database."
-				)
 			} finally {
 				setLoading(false)
 			}
@@ -348,62 +336,10 @@ function App() {
 	// Combine loading states for overall app loading state
 	const isAppLoading = loading || contactsLoading
 
-	const handleSelectConversation = async (conversationId: string) => {
-		setSelectedConversation(conversationId)
-		setLoading(true)
-		setSearchResults(null)
-		setSearchQuery("")
-
-		try {
-			// Check if we already have messages for this conversation
-			if (messagesByConversation[conversationId]) {
-				setMessages(messagesByConversation[conversationId])
-			} else {
-				// Fetch messages from the backend
-				const fetchedMessages = await invoke("get_messages", { conversationId })
-				console.log("Fetched messages:", fetchedMessages)
-
-				// Store and set the messages
-				const messagesArray = fetchedMessages as Message[]
-				setMessages(messagesArray)
-
-				// Update the messages by conversation map
-				setMessagesByConversation((prev) => ({
-					...prev,
-					[conversationId]: messagesArray,
-				}))
-
-				// Process the messages to generate a better title if needed
-				const conversation = conversations.find((c) => c.id === conversationId)
-				if (conversation) {
-					const messagesWithNames = applyContactNamesToMessages(messagesArray)
-					const title = generateConversationTitle(
-						conversation,
-						messagesWithNames
-					)
-
-					// Only update if we have a better title than the default
-					if (title !== "Conversation" || !conversation.name) {
-						setConversationTitles((prev) => ({
-							...prev,
-							[conversationId]: title,
-						}))
-					}
-				}
-			}
-		} catch (error) {
-			console.error("Failed to load messages:", error)
-		} finally {
-			setLoading(false)
-		}
-	}
-
 	const searchMessages = useCallback(async (query: string) => {
-		setIsSearching(true)
 		try {
 			if (!query.trim()) {
 				setSearchResults(null)
-				setSelectedConversation(null)
 				return
 			}
 
@@ -411,11 +347,8 @@ function App() {
 			const results = await invoke("search_messages", { query })
 			console.log("Search results:", results)
 			setSearchResults(results as SearchResult)
-			setSelectedConversation(null)
 		} catch (error) {
 			console.error("Search failed:", error)
-		} finally {
-			setIsSearching(false)
 		}
 	}, [])
 
@@ -452,16 +385,10 @@ function App() {
 				query += ` CONVERSATION:${params.selectedConversation.id}`
 			}
 
-			setSearchQuery(query.trim())
 			await searchMessages(query.trim())
 		},
 		[contactMap.byId, searchMessages]
 	)
-
-	// Function to jump to a conversation from search results
-	const jumpToConversation = (chatId: string) => {
-		handleSelectConversation(chatId)
-	}
 
 	return (
 		<div className='flex h-screen w-screen'>
@@ -495,7 +422,7 @@ function App() {
 
 					<div className='flex flex-1 flex-col'>
 						<div className='p-4 border-b border-border flex items-center justify-between'>
-							<h2 className='font-medium'>Search Results</h2>
+							<h2 className='text-lg font-medium'>Search Results</h2>
 							<Badge variant='outline'>
 								{searchResults?.messages.length || 0} messages
 							</Badge>
