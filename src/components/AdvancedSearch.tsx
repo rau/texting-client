@@ -20,6 +20,7 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 import { Contact } from "@/types"
 import { format } from "date-fns"
@@ -27,7 +28,10 @@ import {
 	Calendar as CalendarIcon,
 	Check,
 	ChevronDown,
+	MessageCircle,
+	MessagesSquare,
 	Search,
+	Users2,
 	X,
 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
@@ -50,6 +54,8 @@ type AdvancedSearchProps = {
 	conversations: ConversationInfo[]
 }
 
+export type ConversationType = "all" | "direct" | "group"
+
 export type SearchParams = {
 	query: string
 	startDate: Date | undefined
@@ -59,6 +65,7 @@ export type SearchParams = {
 	showOnlyMyMessages: boolean
 	showOnlyAttachments: boolean
 	sortDirection: "asc" | "desc"
+	conversationType: ConversationType
 }
 
 export function AdvancedSearch({
@@ -75,9 +82,23 @@ export function AdvancedSearch({
 		showOnlyMyMessages: false,
 		showOnlyAttachments: false,
 		sortDirection: "desc",
+		conversationType: "all",
 	})
 	const [showOnlyContactsWithPhotos, setShowOnlyContactsWithPhotos] =
 		useState(false)
+
+	// Filter conversations based on type
+	const filteredConversations = useMemo(() => {
+		if (searchParams.conversationType === "all") {
+			return conversations
+		}
+		return conversations.filter((conv) => {
+			const isDirectMessage = conv.participants.length <= 1
+			return searchParams.conversationType === "direct"
+				? isDirectMessage
+				: !isDirectMessage
+		})
+	}, [conversations, searchParams.conversationType])
 
 	// Add useEffect to trigger initial search
 	useEffect(() => {
@@ -474,11 +495,11 @@ export function AdvancedSearch({
 					</div>
 				)}
 
-				{/* Conversation Selector */}
 				<div className='space-y-1.5'>
 					<Label htmlFor='conversation-select' className='text-sm font-medium'>
 						Select Conversation
 					</Label>
+
 					<Popover>
 						<PopoverTrigger className='w-full'>
 							<Button
@@ -503,7 +524,7 @@ export function AdvancedSearch({
 								<CommandList>
 									<CommandEmpty>No conversations found.</CommandEmpty>
 									<CommandGroup>
-										{conversations.map((conversation) => (
+										{filteredConversations.map((conversation) => (
 											<CommandItem
 												key={conversation.id}
 												onSelect={() => {
@@ -523,7 +544,9 @@ export function AdvancedSearch({
 														{conversation.name}
 													</span>
 													<span className='text-xs text-muted-foreground'>
-														{conversation.participants.length} participants
+														{conversation.participants.length <= 1
+															? "Direct Message"
+															: `${conversation.participants.length} participants`}
 													</span>
 												</div>
 											</CommandItem>
@@ -533,6 +556,51 @@ export function AdvancedSearch({
 							</Command>
 						</PopoverContent>
 					</Popover>
+					<ToggleGroup
+						type='single'
+						value={searchParams.conversationType}
+						onValueChange={(value: ConversationType) => {
+							if (value) {
+								// Only update if a value is selected
+								setSearchParams((prev) => {
+									// Clear selected conversation when changing type
+									const newParams = {
+										...prev,
+										conversationType: value,
+										selectedConversation: null,
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}
+						}}
+						className='flex justify-between'
+					>
+						<ToggleGroupItem
+							value='all'
+							aria-label='Show all conversations'
+							className='flex-1 gap-2 mt-1'
+						>
+							<MessagesSquare className='h-4 w-4' />
+							All
+						</ToggleGroupItem>
+						<ToggleGroupItem
+							value='direct'
+							aria-label='Show direct messages only'
+							className='flex-1 gap-2'
+						>
+							<MessageCircle className='h-4 w-4' />
+							DMs
+						</ToggleGroupItem>
+						<ToggleGroupItem
+							value='group'
+							aria-label='Show group chats only'
+							className='flex-1 gap-2'
+						>
+							<Users2 className='h-4 w-4' />
+							Groups
+						</ToggleGroupItem>
+					</ToggleGroup>
 				</div>
 			</div>
 		</div>

@@ -23,9 +23,10 @@ pub struct Message {
     text: String,
     date: i64,
     is_from_me: bool,
-    chat_id: Option<String>, // Added for search results to know which chat a message belongs to
-    sender_name: Option<String>, // Added to show who sent each message
-    attachment_path: Option<String>, // Add this new field
+    chat_id: Option<String>,
+    sender_name: Option<String>,
+    attachment_path: Option<String>,
+    conversation_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -668,25 +669,13 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
         };
         
         // Clean up the display name or handle_id if it's a phone number
+        // Use display name if available, otherwise use handle_id
         let name = match (display_name, handle_id) {
-            (Some(dname), _) => {
-                // If display_name exists and looks like a phone number, clean it
-                if dname.chars().any(|c| c.is_ascii_digit()) {
-                    Some(dname.chars().filter(|c| c.is_ascii_digit()).collect())
-                } else {
-                    Some(dname)
-                }
-            },
-            (None, Some(hid)) => {
-                // If handle_id exists and looks like a phone number, clean it
-                if hid.chars().any(|c| c.is_ascii_digit()) {
-                    Some(hid.chars().filter(|c| c.is_ascii_digit()).collect())
-                } else {
-                    Some(hid)
-                }
-            },
+            (Some(dname), _) => Some(dname),
+            (None, Some(hid)) => Some(hid),
             (None, None) => None,
         };
+            
         
         Ok(Conversation {
             id: chat_id.to_string(),
@@ -726,24 +715,10 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
             let display_name: Option<String> = row.get(1)?;
             let handle_id: Option<String> = row.get(2)?;
             
-            // Clean up the display name or handle_id if it's a phone number
+            // Use display name if available, otherwise use handle_id
             let name = match (display_name, handle_id) {
-                (Some(dname), _) => {
-                    // If display_name exists and looks like a phone number, clean it
-                    if dname.chars().any(|c| c.is_ascii_digit()) {
-                        Some(dname.chars().filter(|c| c.is_ascii_digit()).collect())
-                    } else {
-                        Some(dname)
-                    }
-                },
-                (None, Some(hid)) => {
-                    // If handle_id exists and looks like a phone number, clean it
-                    if hid.chars().any(|c| c.is_ascii_digit()) {
-                        Some(hid.chars().filter(|c| c.is_ascii_digit()).collect())
-                    } else {
-                        Some(hid)
-                    }
-                },
+                (Some(dname), _) => Some(dname),
+                (None, Some(hid)) => Some(hid),
                 (None, None) => None,
             };
             
@@ -792,7 +767,7 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
     
     let chat_id: i64 = conversation_id.parse().map_err(|_| AppError::OtherError("Invalid conversation ID".to_string()))?;
     
-    // Query to get messages for a specific conversation with sender information
+    // Updated query to include conversation name
     let mut stmt = conn.prepare(r#"
         SELECT 
             m.ROWID as message_id,
@@ -800,11 +775,14 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             m.date,
             m.is_from_me,
             h.id as handle_id,
-            COALESCE(h.uncanonicalized_id, h.id) as sender_id
+            COALESCE(h.uncanonicalized_id, h.id) as sender_id,
+            c.display_name as conversation_name
         FROM 
             message m
         INNER JOIN 
             chat_message_join cmj ON m.ROWID = cmj.message_id
+        INNER JOIN
+            chat c ON cmj.chat_id = c.ROWID
         LEFT JOIN
             handle h ON m.handle_id = h.ROWID
         WHERE 
@@ -839,6 +817,9 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             _ => None,
         };
 
+        // Get conversation name
+        let conversation_name: Option<String> = row.get(6)?;
+
         // Get attachment path
         let attachment_path = match get_message_attachments(&conn, message_id) {
             Ok(path) => path,
@@ -853,6 +834,7 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             chat_id: Some(conversation_id.clone()),
             sender_name,
             attachment_path,
+            conversation_name,
         })
     })?;
     
@@ -1042,6 +1024,7 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
                 chat_id,
                 sender_name,
                 attachment_path,
+                conversation_name: None,
             })
         })?;
 

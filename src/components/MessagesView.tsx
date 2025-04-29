@@ -11,6 +11,15 @@ import { Button } from "./ui/button"
 type MessagesViewProps = {
 	loading: boolean
 	messages: Message[]
+	conversations: {
+		id: string
+		name: string
+		participants: {
+			id: string
+			name: string
+			type: "contact"
+		}[]
+	}[]
 }
 
 // Helper function to format contact names consistently
@@ -57,7 +66,11 @@ const formatContactName = (
 	}
 }
 
-export function MessagesView({ loading, messages }: MessagesViewProps) {
+export function MessagesView({
+	loading,
+	messages,
+	conversations,
+}: MessagesViewProps) {
 	const [homePath, setHomePath] = useState<string>("")
 	const hasSearched = messages !== null
 
@@ -65,6 +78,21 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 		// Get the home directory path when component mounts
 		homeDir().then(setHomePath).catch(console.error)
 	}, [])
+
+	// Add a function to get conversation name
+	const getConversationName = (chatId: string | undefined) => {
+		if (!chatId) return "Unknown Conversation"
+		const conversation = conversations.find((conv) => conv.id === chatId)
+		if (!conversation) return "Unknown Conversation"
+
+		// If there's only one participant, it's a one-on-one DM
+		if (conversation.participants.length <= 1) {
+			return `in your conversation with ${conversation.name}`
+		}
+
+		// For group chats, just show the conversation name
+		return `in ${conversation.name}`
+	}
 
 	if (loading) {
 		return <Loader />
@@ -117,8 +145,13 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 									</Avatar>
 									<div className='flex-1'>
 										<div className='flex items-center justify-between mb-1'>
-											<div className='font-medium'>
-												{message.is_from_me ? "You" : contactInfo.displayName}
+											<div className='flex flex-col'>
+												<div className='font-medium'>
+													{message.is_from_me ? "You" : contactInfo.displayName}
+												</div>
+												<div className='text-xs text-muted-foreground'>
+													{getConversationName(message.chat_id)}
+												</div>
 											</div>
 											<Button
 												variant='outline'

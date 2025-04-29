@@ -3,6 +3,11 @@ export type Conversation = {
 	name: string | null
 	last_message: string | null
 	last_message_date: number
+	participants: {
+		id: string
+		name: string
+		type: "contact"
+	}[]
 }
 
 export type Message = {
@@ -14,6 +19,7 @@ export type Message = {
 	sender_name?: string
 	contact?: Contact
 	attachment_path?: string
+	conversation_name: string
 }
 
 export type SearchResult = {

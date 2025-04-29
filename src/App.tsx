@@ -97,10 +97,36 @@ function App() {
 		if (!searchResults) return null
 
 		let updatedMessages = applyContactsToMessages(searchResults.messages)
+
+		// Filter messages based on conversation type if set
+		if (searchParams?.conversationType !== "all") {
+			updatedMessages = updatedMessages.filter((message) => {
+				const conversationMessages =
+					messagesByConversation[message.chat_id || ""]
+				if (!conversationMessages) return false
+
+				const uniqueParticipants = new Set(
+					conversationMessages
+						.filter((msg) => !msg.is_from_me && msg.sender_name)
+						.map((msg) => msg.sender_name)
+				)
+
+				const isDirectMessage = uniqueParticipants.size <= 1
+				return searchParams?.conversationType === "direct"
+					? isDirectMessage
+					: !isDirectMessage
+			})
+		}
+
 		return {
 			messages: updatedMessages,
 		}
-	}, [searchResults, contacts])
+	}, [
+		searchResults,
+		contacts,
+		messagesByConversation,
+		searchParams?.conversationType,
+	])
 
 	const generateConversationTitle = (
 		conversation: Conversation,
@@ -206,7 +232,7 @@ function App() {
 			// This will be implemented in Rust to safely access the SQLite DB
 			const fetchedConversations = await invoke("get_conversations")
 			setConversations(fetchedConversations as Conversation[])
-
+			console.log("Fetched conversations:", fetchedConversations)
 			// Initialize the conversation titles with what we have
 			const initialTitles: Record<string, string> = {}
 			for (const conv of fetchedConversations as Conversation[]) {
@@ -346,6 +372,7 @@ function App() {
 				showOnlyMyMessages: false,
 				showOnlyAttachments: false,
 				sortDirection: "asc",
+				conversationType: "all",
 			})
 		}
 	}, [
@@ -394,6 +421,23 @@ function App() {
 						<MessagesView
 							loading={loading}
 							messages={searchResultsWithContacts?.messages || []}
+							conversations={conversations.map((conv) => ({
+								id: conv.id,
+								name:
+									conversationTitles[conv.id] || conv.name || "Conversation",
+								participants:
+									messagesByConversation[conv.id]
+										?.filter((msg) => !msg.is_from_me && msg.sender_name)
+										?.map((msg) => ({
+											id: msg.sender_name || "",
+											name: msg.contact?.first_name || msg.sender_name || "",
+											type: "contact" as const,
+										}))
+										?.filter(
+											(participant, index, self) =>
+												index === self.findIndex((p) => p.id === participant.id)
+										) || [],
+							}))}
 						/>
 					</div>
 				</>
