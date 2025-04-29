@@ -184,62 +184,79 @@ function App() {
 		}
 	}
 
+	// Function to load conversations
+	const loadConversations = async () => {
+		try {
+			setLoading(true)
+			// This will be implemented in Rust to safely access the SQLite DB
+			const fetchedConversations = await invoke("get_conversations")
+			console.log("Fetched conversations:", fetchedConversations)
+			setConversations(fetchedConversations as Conversation[])
+
+			// Initialize the conversation titles with what we have
+			const initialTitles: Record<string, string> = {}
+			for (const conv of fetchedConversations as Conversation[]) {
+				// Use the conversation name if available, or try to extract names from participants
+				if (conv.name) {
+					initialTitles[conv.id] = conv.name
+				} else if (conv.last_message) {
+					// Try to extract a name from the last sender
+					initialTitles[conv.id] = "Chat" // Will be updated shortly
+				} else {
+					initialTitles[conv.id] = "Chat" // Will be updated shortly
+				}
+			}
+			setConversationTitles(initialTitles)
+
+			// Preload messages for each conversation
+			await preloadConversationMessages(fetchedConversations as Conversation[])
+		} catch (error) {
+			console.error("Failed to load conversations:", error)
+		} finally {
+			setLoading(false)
+		}
+	}
+
+	// Function to load contacts
+	const loadContacts = async () => {
+		try {
+			setContactsLoading(true)
+			const contacts = await invoke("read_contacts")
+			// @ts-ignore
+			const contactsJSON = contacts.contacts as Contact[]
+			console.log("contactsJSON", contactsJSON)
+			setContacts(contactsJSON)
+		} catch (error) {
+			console.error("Failed to load contacts:", error)
+		} finally {
+			setContactsLoading(false)
+		}
+	}
+
+	// Function to refresh all data
+	const refreshData = useCallback(async () => {
+		console.log("Refreshing data...")
+		await Promise.all([loadConversations(), loadContacts()])
+	}, [])
+
+	// Handle keyboard shortcuts
+	useEffect(() => {
+		const handleKeyDown = (event: KeyboardEvent) => {
+			// Check for Command+R (Mac) or Control+R (Windows/Linux)
+			if ((event.metaKey || event.ctrlKey) && event.key === "r") {
+				event.preventDefault() // Prevent the browser's default refresh
+				refreshData()
+			}
+		}
+
+		window.addEventListener("keydown", handleKeyDown)
+		return () => window.removeEventListener("keydown", handleKeyDown)
+	}, [refreshData])
+
 	// Initial load of conversations and contacts
 	useEffect(() => {
-		// On component mount, try to load conversations and contacts
-		const loadConversations = async () => {
-			try {
-				setLoading(true)
-				// This will be implemented in Rust to safely access the SQLite DB
-				const fetchedConversations = await invoke("get_conversations")
-				console.log("Fetched conversations:", fetchedConversations)
-				setConversations(fetchedConversations as Conversation[])
-
-				// Initialize the conversation titles with what we have
-				const initialTitles: Record<string, string> = {}
-				for (const conv of fetchedConversations as Conversation[]) {
-					// Use the conversation name if available, or try to extract names from participants
-					if (conv.name) {
-						initialTitles[conv.id] = conv.name
-					} else if (conv.last_message) {
-						// Try to extract a name from the last sender
-						initialTitles[conv.id] = "Chat" // Will be updated shortly
-					} else {
-						initialTitles[conv.id] = "Chat" // Will be updated shortly
-					}
-				}
-				setConversationTitles(initialTitles)
-
-				// Preload messages for each conversation
-				await preloadConversationMessages(
-					fetchedConversations as Conversation[]
-				)
-			} catch (error) {
-				console.error("Failed to load conversations:", error)
-			} finally {
-				setLoading(false)
-			}
-		}
-
-		// Load contacts automatically when the app starts
-		const loadContacts = async () => {
-			try {
-				setContactsLoading(true)
-				const contacts = await invoke("read_contacts")
-				// @ts-ignore
-				const contactsJSON = contacts.contacts as Contact[]
-				console.log("contactsJSON", contactsJSON)
-				setContacts(contactsJSON)
-			} catch (error) {
-				console.error("Failed to load contacts:", error)
-			} finally {
-				setContactsLoading(false)
-			}
-		}
-
-		// Load both conversations and contacts
-		Promise.all([loadConversations(), loadContacts()])
-	}, [])
+		refreshData()
+	}, [refreshData])
 
 	// Combine loading states for overall app loading state
 	const isAppLoading = loading || contactsLoading
