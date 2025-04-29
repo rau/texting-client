@@ -141,7 +141,7 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 											</div>
 										</div>
 										<p className='mt-1 text-xs opacity-50'>
-											{contactInfo.identifier}
+											{!message.is_from_me && contactInfo.identifier}
 										</p>
 
 										<Separator className='my-2' />

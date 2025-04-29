@@ -37,10 +37,7 @@ function App() {
 			const lowerEmail = senderId.toLowerCase()
 			const contact = contacts.find((c) => c.emails.includes(lowerEmail))
 			if (contact) {
-				// console.log("Contact found for email:", contact)
 				return contact
-			} else {
-				console.log("No contact found for email:", senderId)
 			}
 		}
 
@@ -78,9 +75,6 @@ function App() {
 				legacy_photo: "",
 			},
 		}
-
-		// creating default contact for sender ID
-		console.log("Creating default contact for sender ID:", contact)
 
 		return contact
 	}
