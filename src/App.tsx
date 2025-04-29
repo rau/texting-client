@@ -255,6 +255,7 @@ function App() {
 					query,
 					showOnlyMyMessages: searchParams?.showOnlyMyMessages,
 					showOnlyAttachments: searchParams?.showOnlyAttachments,
+					sortDirection: searchParams?.sortDirection,
 				})
 				console.log("Search results:", results)
 				setSearchResults(results as SearchResult)
@@ -262,7 +263,11 @@ function App() {
 				console.error("Search failed:", error)
 			}
 		},
-		[searchParams?.showOnlyMyMessages, searchParams?.showOnlyAttachments]
+		[
+			searchParams?.showOnlyMyMessages,
+			searchParams?.showOnlyAttachments,
+			searchParams?.sortDirection,
+		]
 	)
 
 	const handleSearch = useCallback(
@@ -318,6 +323,7 @@ function App() {
 				selectedConversation: null,
 				showOnlyMyMessages: false,
 				showOnlyAttachments: false,
+				sortDirection: "asc",
 			})
 		}
 	}, [

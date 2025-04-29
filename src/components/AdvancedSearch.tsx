@@ -58,6 +58,7 @@ export type SearchParams = {
 	selectedConversation: ConversationInfo | null
 	showOnlyMyMessages: boolean
 	showOnlyAttachments: boolean
+	sortDirection: "asc" | "desc"
 }
 
 export function AdvancedSearch({
@@ -73,6 +74,7 @@ export function AdvancedSearch({
 		selectedConversation: null,
 		showOnlyMyMessages: false,
 		showOnlyAttachments: false,
+		sortDirection: "desc",
 	})
 
 	// Add useEffect to trigger initial search
@@ -116,6 +118,31 @@ export function AdvancedSearch({
 									return newParams
 								})
 							}
+						/>
+					</div>
+				</div>
+
+				{/* Sort Direction Toggle */}
+				<div className='space-y-2 mb-4'>
+					<div className='flex items-center justify-between'>
+						<Label htmlFor='sort-direction' className='text-sm font-medium'>
+							Sort by Oldest First
+						</Label>
+						<Switch
+							id='sort-direction'
+							checked={searchParams.sortDirection === "asc"}
+							onCheckedChange={(checked) => {
+								setSearchParams((prev) => {
+									const newParams = {
+										...prev,
+										sortDirection: checked
+											? ("asc" as const)
+											: ("desc" as const),
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}}
 						/>
 					</div>
 				</div>

@@ -900,8 +900,8 @@ struct SearchParams {
 }
 
 #[tauri::command]
-async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>) -> Result<SearchResult, AppError> {
-    println!("Received search query: '{}'", query);  // Debug log
+async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>, sort_direction: Option<String>) -> Result<SearchResult, AppError> {
+    println!("Received search query: '{}', sort direction: {:?}", query, sort_direction);  // Debug log
     
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
@@ -1005,7 +1005,13 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
             )");
         }
 
-        sql.push_str(" ORDER BY m.date DESC LIMIT 100");
+        // Add ORDER BY clause with sort direction
+        sql.push_str(" ORDER BY m.date ");
+        sql.push_str(match sort_direction.as_deref() {
+            Some("asc") => "ASC",
+            _ => "DESC"  // Default to DESC if not specified or any other value
+        });
+        sql.push_str(" LIMIT 100");
 
         let mut stmt = conn.prepare(&sql)?;
         let message_iter = stmt.query_map([], |row| {
