@@ -3,6 +3,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Message } from "@/types"
+import { convertFileSrc } from "@tauri-apps/api/core"
+import { homeDir } from "@tauri-apps/api/path"
+import { useEffect, useState } from "react"
 
 type MessagesViewProps = {
 	loading: boolean
@@ -10,7 +13,13 @@ type MessagesViewProps = {
 }
 
 export function MessagesView({ loading, messages }: MessagesViewProps) {
+	const [homePath, setHomePath] = useState<string>("")
 	const hasSearched = messages !== null
+
+	useEffect(() => {
+		// Get the home directory path when component mounts
+		homeDir().then(setHomePath).catch(console.error)
+	}, [])
 
 	if (loading) {
 		return <Loader />
@@ -32,6 +41,16 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 		)
 	}
 
+	const getAssetUrl = (filePath: string) => {
+		// expand ~
+		const abs = filePath.startsWith("~")
+			? filePath.replace("~", homePath)
+			: filePath
+
+		// tauri-safe url (asset:// or 127.0.0.1 blob behind the scenes)
+		return convertFileSrc(abs)
+	}
+
 	return (
 		<div className='flex-1 flex flex-col overflow-y-auto'>
 			<ScrollArea className='flex-1'>
@@ -39,18 +58,27 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 					{messages.map((message) => (
 						<div
 							key={message.id}
-							className='border rounded-lg p-4 hover:bg-muted/50 transition-colors'
+							className='border border-border rounded-lg p-4 hover:bg-muted/50 transition-colors'
 						>
 							<div className='flex items-start gap-3'>
 								<Avatar className='h-10 w-10'>
 									<AvatarImage
 										src={message.contact?.photo?.full_photo || ""}
-										alt={message.contact?.first_name || ""}
+										alt={
+											message.contact?.first_name +
+												" " +
+												message.contact?.last_name || ""
+										}
 									/>
 									<AvatarFallback>
 										{(message.contact?.first_name || "")
-											.substring(0, 2)
-											.toUpperCase()}
+											.substring(0, 1)
+											.toUpperCase() +
+											(message.contact?.last_name
+												? message.contact?.last_name
+														.substring(0, 1)
+														.toUpperCase()
+												: "")}
 									</AvatarFallback>
 								</Avatar>
 								<div className='flex-1'>
@@ -58,7 +86,9 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 										<div className='font-medium'>
 											{message.is_from_me
 												? "You"
-												: message.contact?.first_name || ""}
+												: message.contact?.first_name +
+														" " +
+														message.contact?.last_name || ""}
 										</div>
 										<div className='text-xs text-muted-foreground'>
 											{new Date(message.date * 1000).toLocaleString()}
@@ -66,6 +96,15 @@ export function MessagesView({ loading, messages }: MessagesViewProps) {
 									</div>
 									<Separator className='my-2' />
 									<div className='text-sm'>{message.text}</div>
+									{message.attachment_path && (
+										<div className='text-xs text-muted-foreground mt-2'>
+											<img
+												src={getAssetUrl(message.attachment_path)}
+												alt='Attachment'
+												className='max-w-sm rounded-lg shadow-lg'
+											/>
+										</div>
+									)}
 								</div>
 							</div>
 						</div>
