@@ -85,7 +85,6 @@ function App() {
 
 		return {
 			messages: updatedMessages,
-			total_count: searchResults.total_count,
 		}
 	}, [searchResults, contacts, searchParams?.showOnlyMyMessages])
 
@@ -190,7 +189,6 @@ function App() {
 			setLoading(true)
 			// This will be implemented in Rust to safely access the SQLite DB
 			const fetchedConversations = await invoke("get_conversations")
-			console.log("Fetched conversations:", fetchedConversations)
 			setConversations(fetchedConversations as Conversation[])
 
 			// Initialize the conversation titles with what we have
@@ -224,7 +222,6 @@ function App() {
 			const contacts = await invoke("read_contacts")
 			// @ts-ignore
 			const contactsJSON = contacts.contacts as Contact[]
-			console.log("contactsJSON", contactsJSON)
 			setContacts(contactsJSON)
 		} catch (error) {
 			console.error("Failed to load contacts:", error)
@@ -235,7 +232,6 @@ function App() {
 
 	// Function to refresh all data
 	const refreshData = useCallback(async () => {
-		console.log("Refreshing data...")
 		await Promise.all([loadConversations(), loadContacts()])
 	}, [])
 
@@ -263,12 +259,6 @@ function App() {
 
 	const searchMessages = useCallback(async (query: string) => {
 		try {
-			if (!query.trim()) {
-				setSearchResults(null)
-				return
-			}
-
-			console.log("Searching with query:", query)
 			const results = await invoke("search_messages", { query })
 			console.log("Search results:", results)
 			setSearchResults(results as SearchResult)

@@ -30,7 +30,7 @@ import {
 	Search,
 	X,
 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 type ConversationParticipant = {
 	id: string
@@ -57,6 +57,7 @@ export type SearchParams = {
 	selectedContacts: Contact[]
 	selectedConversation: ConversationInfo | null
 	showOnlyMyMessages: boolean
+	showOnlyAttachments: boolean
 }
 
 export function AdvancedSearch({
@@ -71,7 +72,15 @@ export function AdvancedSearch({
 		selectedContacts: [],
 		selectedConversation: null,
 		showOnlyMyMessages: false,
+		showOnlyAttachments: false,
 	})
+
+	// Add useEffect to trigger initial search
+	useEffect(() => {
+		// Trigger search with empty parameters when component mounts
+		console.log("searchParams", searchParams)
+		onSearch(searchParams)
+	}, []) // Empty dependency array means this runs once when component mounts
 
 	// Collect all contacts from the contactMap and sort them alphabetically by name
 	const contactsArray = useMemo(() => {
@@ -125,6 +134,29 @@ export function AdvancedSearch({
 									const newParams = {
 										...prev,
 										showOnlyMyMessages: checked,
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}}
+						/>
+					</div>
+				</div>
+
+				{/* Show Only Messages with Attachments Toggle */}
+				<div className='space-y-2 mb-4'>
+					<div className='flex items-center justify-between'>
+						<Label htmlFor='show-attachments' className='text-sm font-medium'>
+							Show Only Messages with Attachments
+						</Label>
+						<Switch
+							id='show-attachments'
+							checked={searchParams.showOnlyAttachments}
+							onCheckedChange={(checked) => {
+								setSearchParams((prev) => {
+									const newParams = {
+										...prev,
+										showOnlyAttachments: checked,
 									}
 									onSearch(newParams)
 									return newParams

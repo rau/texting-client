@@ -13,11 +13,11 @@ export type Message = {
 	chat_id?: string
 	sender_name?: string
 	contact?: Contact
+	attachment_path?: string
 }
 
 export type SearchResult = {
 	messages: Message[]
-	total_count: number
 }
 
 export type Contact = {

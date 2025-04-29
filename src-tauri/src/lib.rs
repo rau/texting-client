@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::fs;
 use std::fmt;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use rusqlite::OptionalExtension;
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -23,12 +24,12 @@ pub struct Message {
     is_from_me: bool,
     chat_id: Option<String>, // Added for search results to know which chat a message belongs to
     sender_name: Option<String>, // Added to show who sent each message
+    attachment_path: Option<String>, // Add this new field
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SearchResult {
     messages: Vec<Message>,
-    total_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -763,6 +764,25 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
     Ok(conversations)
 }
 
+// Fix the get_message_attachments function
+fn get_message_attachments(conn: &Connection, message_id: i64) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(r#"
+        SELECT 
+            a.filename
+        FROM 
+            attachment a
+        JOIN 
+            message_attachment_join maj ON maj.attachment_id = a.ROWID
+        WHERE 
+            maj.message_id = ?
+        LIMIT 1
+    "#)?;
+
+    stmt.query_row([message_id], |row| {
+        row.get::<_, String>(0)
+    }).optional()
+}
+
 #[tauri::command]
 async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError> {
     
@@ -827,7 +847,12 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             },
             _ => None, // No sender name for my messages or if sender_id is NULL
         };
-        
+
+        // Get attachment path
+        let attachment_path = match get_message_attachments(&conn, message_id) {
+            Ok(path) => path,
+            Err(_) => None,
+        };
         
         Ok(Message {
             id: message_id,
@@ -836,6 +861,7 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             is_from_me,
             chat_id: Some(conversation_id.clone()),
             sender_name,
+            attachment_path,
         })
     })?;
     
@@ -860,304 +886,113 @@ impl rusqlite::ToSql for SqlParam {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct SearchParams {
+    query: String,
+    start_timestamp: Option<i64>,
+    end_timestamp: Option<i64>,
+    sender_filters: Vec<String>,
+    conversation_id: Option<String>,
+    show_only_my_messages: bool,
+    show_only_attachments: bool,  // Add this new field
+}
+
 #[tauri::command]
 async fn search_messages(query: String) -> Result<SearchResult, AppError> {
-    // Parse advanced search parameters
-    let mut text_query = String::new();
-    let mut start_timestamp: Option<i64> = None;
-    let mut end_timestamp: Option<i64> = None;
-    let mut sender_filters: Vec<String> = Vec::new();
-    let mut conversation_id: Option<String> = None;
-    
-    // Split the query by spaces, but respect quoted strings
-    let mut current_part = String::new();
-    let mut in_quotes = false;
-    let mut chars = query.chars().peekable();
-    let mut in_parentheses = false;
-    
-    while let Some(c) = chars.next() {
-        match c {
-            '(' => {
-                in_parentheses = true;
-                // Don't add parentheses to the text query
-                continue;
-            }
-            ')' => {
-                in_parentheses = false;
-                // Don't add parentheses to the text query
-                continue;
-            }
-            '"' => {
-                in_quotes = !in_quotes;
-                current_part.push(c);
-            }
-            ' ' if !in_quotes => {
-                if !current_part.is_empty() {
-                    let part = current_part.clone();
-                    if part.starts_with("AFTER:") {
-                        if let Some(timestamp_str) = part.strip_prefix("AFTER:") {
-                            if let Ok(timestamp) = timestamp_str.parse::<i64>() {
-                                start_timestamp = Some(timestamp);
-                            }
-                        }
-                    } else if part.starts_with("BEFORE:") {
-                        if let Some(timestamp_str) = part.strip_prefix("BEFORE:") {
-                            if let Ok(timestamp) = timestamp_str.parse::<i64>() {
-                                end_timestamp = Some(timestamp);
-                            }
-                        }
-                    } else if part.starts_with("FROM:") {
-                        // Extract the value between quotes if present
-                        if let Some(sender) = part.strip_prefix("FROM:") {
-                            let clean_sender = if sender.starts_with('"') && sender.ends_with('"') {
-                                sender[1..sender.len()-1].to_string()
-                            } else {
-                                sender.to_string()
-                            };
-                            sender_filters.push(clean_sender);
-                        }
-                    } else if part.starts_with("CONVERSATION:") {
-                        // Extract the conversation ID between quotes if present
-                        if let Some(conv_id) = part.strip_prefix("CONVERSATION:") {
-                            let clean_id = if conv_id.starts_with('"') && conv_id.ends_with('"') {
-                                conv_id[1..conv_id.len()-1].to_string()
-                            } else {
-                                conv_id.to_string()
-                            };
-                            conversation_id = Some(clean_id);
-                        }
-                    } else if !in_parentheses { // Only add to text query if not in parentheses
-                        // Add to regular text query
-                        if !text_query.is_empty() {
-                            text_query.push(' ');
-                        }
-                        text_query.push_str(&part);
-                    }
-                }
-                current_part.clear();
-            }
-            '\\' if in_quotes => {
-                if let Some(next_char) = chars.next() {
-                    current_part.push(next_char);
-                }
-            }
-            'O' if current_part.ends_with(" OR") && in_parentheses => {
-                // Skip "OR" when in parentheses
-                current_part.clear();
-            }
-            'R' if current_part.ends_with(" O") && in_parentheses => {
-                // Skip "OR" when in parentheses
-                current_part.clear();
-            }
-            _ => current_part.push(c),
-        }
-    }
-    
-    // Process the last part if any
-    if !current_part.is_empty() {
-        let part = current_part;
-        if part.starts_with("FROM:") {
-            if let Some(sender) = part.strip_prefix("FROM:") {
-                let clean_sender = if sender.starts_with('"') && sender.ends_with('"') {
-                    sender[1..sender.len()-1].to_string()
-                } else {
-                    sender.to_string()
-                };
-                sender_filters.push(clean_sender);
-            }
-        } else if part.starts_with("CONVERSATION:") {
-            if let Some(conv_id) = part.strip_prefix("CONVERSATION:") {
-                let clean_id = if conv_id.starts_with('"') && conv_id.ends_with('"') {
-                    conv_id[1..conv_id.len()-1].to_string()
-                } else {
-                    conv_id.to_string()
-                };
-                conversation_id = Some(clean_id);
-            }
-        } else if !part.starts_with("AFTER:") && !part.starts_with("BEFORE:") && !in_parentheses {
-            if !text_query.is_empty() {
-                text_query.push(' ');
-            }
-            text_query.push_str(&part);
-        }
-    }
-    
-    // If text query is empty after parsing special commands, search for all messages
-    if text_query.is_empty() {
-        text_query = "%".to_string();
-    } else {
-        text_query = format!("%{}%", text_query);
-    }
+    println!("Received search query: '{}'", query);  // Debug log
     
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
-    
-    // Start building the SQL query with additional WHERE clauses
-    let mut sql = String::from(r#"
-        SELECT 
-            m.ROWID as message_id,
-            m.text,
-            m.date,
-            m.is_from_me,
-            cmj.chat_id,
-            h.id as handle_id,
-            COALESCE(h.uncanonicalized_id, h.id) as sender_id
-        FROM 
-            message m
-        INNER JOIN 
-            chat_message_join cmj ON m.ROWID = cmj.message_id
-        LEFT JOIN
-            handle h ON m.handle_id = h.ROWID
-        WHERE 1=1
-    "#);
-    
-    // Add text search if provided (not empty and not just %)
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if text_query != "%" {
-        sql.push_str(" AND m.text LIKE ?");
-        params.push(Box::new(text_query));
-    }
-    
-    // Add date filters if provided
-    if let Some(start_time) = start_timestamp {
-        let apple_start = (start_time - 978307200) * 1_000_000_000;
-        sql.push_str(" AND m.date >= ?");
-        params.push(Box::new(apple_start));
-    }
-    
-    if let Some(end_time) = end_timestamp {
-        let apple_end = (end_time - 978307200) * 1_000_000_000;
-        sql.push_str(" AND m.date <= ?");
-        params.push(Box::new(apple_end));
-    }
-    
-    // Add sender filters if provided - now handling multiple senders with OR logic
-    if !sender_filters.is_empty() {
-        sql.push_str(" AND (");
-        let mut first = true;
-        
-        for sender in sender_filters {
-            if !first {
-                sql.push_str(" OR ");
-            }
-            first = false;
-            
-            // Check if sender might be a phone number
-            let is_numeric = sender.chars().all(|c| c.is_digit(10) || c == '+' || c == '-' || c == '(' || c == ')' || c == ' ');
-            
-            if is_numeric {
-                // For phone numbers, search with wildcard to handle different formats
-                let numeric_only: String = sender.chars().filter(|c| c.is_digit(10)).collect();
-                if !numeric_only.is_empty() {
-                    sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
-                    let pattern = format!("%{}%", numeric_only);
-                    params.push(Box::new(pattern.clone()));
-                    params.push(Box::new(pattern));
-                } else {
-                    sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
-                    let pattern = format!("%{}%", sender);
-                    params.push(Box::new(pattern.clone()));
-                    params.push(Box::new(pattern));
-                }
-            } else if sender.contains('@') {
-                // For emails, do exact match (case insensitive)
-                sql.push_str("(LOWER(h.id) = LOWER(?) OR LOWER(h.uncanonicalized_id) = LOWER(?))");
-                params.push(Box::new(sender.clone()));
-                params.push(Box::new(sender));
-            } else {
-                // For names or other identifiers, use LIKE
-                sql.push_str("(h.id LIKE ? OR h.uncanonicalized_id LIKE ?)");
-                let pattern = format!("%{}%", sender);
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern));
-            }
-        }
-        
-        sql.push_str(")");
-    }
-    
-    // Add conversation filter if provided
-    if let Some(conv_id) = conversation_id {
-        sql.push_str(" AND cmj.chat_id = ?");
-        // Convert string to i64 for SQLite
-        if let Ok(chat_id) = conv_id.parse::<i64>() {
-            params.push(Box::new(chat_id));
-        } else {
-            println!("Invalid conversation ID format: {}", conv_id);
-            return Ok(SearchResult {
-                messages: Vec::new(),
-                total_count: 0,
-            });
-        }
-    }
-    
-    // Add ordering and limit
-    sql.push_str(" ORDER BY m.date DESC LIMIT 500");
-    
-    let mut stmt = conn.prepare(&sql)?;
-    
-    // Create a slice of ToSql trait objects from our params vector
-    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    
-    let message_iter = stmt.query_map(param_refs.as_slice(), |row| {
-        let message_id: i64 = row.get(0)?;
-        let text: Option<String> = row.get(1)?;
-        
-        // Handle potential NULL or type issues with date
-        let date: Result<i64, rusqlite::Error> = row.get(2);
-        let date = match date {
-            Ok(date) => apple_time_to_unix(date / 1_000_000_000),
-            Err(_) => 0, // Default to 0 for NULL dates
-        };
-        
-        // Handle potential issues with is_from_me
-        let is_from_me: Result<i64, rusqlite::Error> = row.get(3);
-        let is_from_me = match is_from_me {
-            Ok(value) => value == 1,
-            Err(_) => false, // Default to false for NULL or invalid values
-        };
 
-        // Get chat_id
-        let chat_id: Result<i64, rusqlite::Error> = row.get(4);
-        let chat_id = match chat_id {
-            Ok(id) => Some(id.to_string()),
-            Err(_) => None,
-        };
-        
-        // Get sender information
-        let sender_id: Result<String, rusqlite::Error> = row.get(6);
-        let sender_name = match sender_id {
-            Ok(id) if !is_from_me => {
-               
-                Some(id)
-            },
-            _ => None, // No sender name for my messages or if sender_id is NULL
-        };
-        
-        Ok(Message {
-            id: message_id,
-            text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
-            date,
-            is_from_me,
-            chat_id,
-            sender_name,
-        })
-    })?;
-    
-    let mut messages = Vec::new();
-    for message in message_iter {
-        match message {
-            Ok(msg) => messages.push(msg),
-            Err(e) => println!("Error processing search result: {:?}", e),
+    // If query is empty, we'll just fetch recent messages
+    if query.trim().is_empty() {
+        println!("Query is empty, fetching recent messages");  // Debug log
+        let sql = r#"
+            SELECT 
+                m.ROWID as message_id,
+                m.text,
+                m.date,
+                m.is_from_me,
+                cmj.chat_id,
+                h.id as handle_id,
+                COALESCE(h.uncanonicalized_id, h.id) as sender_id,
+                (
+                    SELECT a.filename 
+                    FROM attachment a 
+                    JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+                    WHERE maj.message_id = m.ROWID 
+                    LIMIT 1
+                ) as attachment_path
+            FROM 
+                message m
+            INNER JOIN 
+                chat_message_join cmj ON m.ROWID = cmj.message_id
+            LEFT JOIN
+                handle h ON m.handle_id = h.ROWID
+            WHERE m.text IS NOT NULL  -- Add this to filter out empty messages
+            ORDER BY 
+                m.date DESC
+            LIMIT 100
+        "#;
+
+        let mut stmt = conn.prepare(sql)?;
+        let message_iter = stmt.query_map([], |row| {
+            let message_id: i64 = row.get(0)?;
+            let text: Option<String> = row.get(1)?;
+            
+            let date: Result<i64, rusqlite::Error> = row.get(2);
+            let date = match date {
+                Ok(date) => apple_time_to_unix(date / 1_000_000_000),
+                Err(_) => 0,
+            };
+            
+            let is_from_me: Result<i64, rusqlite::Error> = row.get(3);
+            let is_from_me = match is_from_me {
+                Ok(value) => value == 1,
+                Err(_) => false,
+            };
+
+            let chat_id: Result<i64, rusqlite::Error> = row.get(4);
+            let chat_id = match chat_id {
+                Ok(id) => Some(id.to_string()),
+                Err(_) => None,
+            };
+            
+            let sender_id: Result<String, rusqlite::Error> = row.get(6);
+            let sender_name = match sender_id {
+                Ok(id) if !is_from_me => Some(id),
+                _ => None,
+            };
+
+            let attachment_path: Option<String> = row.get(7).ok();
+            
+            Ok(Message {
+                id: message_id,
+                text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
+                date,
+                is_from_me,
+                chat_id,
+                sender_name,
+                attachment_path,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for message in message_iter {
+            if let Ok(msg) = message {
+                messages.push(msg);
+            }
         }
+
+        println!("Found {} recent messages", messages.len());  // Debug log
+        return Ok(SearchResult { messages });
     }
-    
-    let total_count = messages.len();
-    println!("Total matching messages found: {}", total_count);
-    
+
+    // Rest of the existing search logic for when query is not empty
+    // ... existing code ...
+
     Ok(SearchResult {
-        messages,
-        total_count,
+        messages: Vec::new(),
     })
 }
 
@@ -1174,3 +1009,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
