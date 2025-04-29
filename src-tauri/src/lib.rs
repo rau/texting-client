@@ -6,6 +6,7 @@ use std::fs;
 use std::fmt;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rusqlite::OptionalExtension;
+use chrono;
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -268,7 +269,7 @@ fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
 async fn read_contacts() -> Result<ContactResponse, AppError> {
     let db_path = match get_addressbook_db_path() {
         Ok(path) => path,
-        Err(e) => {
+        Err(_e) => {
             return Ok(ContactResponse {
                 contacts: Vec::new(),
             });
@@ -277,7 +278,7 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
     
     let conn = match Connection::open(&db_path) {
         Ok(conn) => conn,
-        Err(e) => {
+        Err(_e) => {
             return Ok(ContactResponse {
                 contacts: Vec::new(),
             });
@@ -588,7 +589,7 @@ async fn read_contacts() -> Result<ContactResponse, AppError> {
     }
     
     if text_output.is_empty() {
-        let db_info = format!("Database path: {}\n", db_path.display());
+        
         return Ok(ContactResponse {
             contacts: Vec::new(),
         });
@@ -878,6 +879,7 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
 
 // Add this before the search_messages function
 #[derive(Debug)]
+#[allow(dead_code)]
 struct SqlParam(String);
 
 impl rusqlite::ToSql for SqlParam {
@@ -904,10 +906,60 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
 
-    // If query is empty, we'll just fetch recent messages
-    if query.trim().is_empty() {
-        println!("Query is empty, fetching recent messages");  // Debug log
-        let sql = r#"
+    // Parse BEFORE and AFTER dates from query
+    let mut date_conditions = Vec::new();
+    let mut cleaned_query = query.clone();
+
+    // Helper function to convert date to Apple timestamp
+    let date_to_apple_timestamp = |date_str: &str| -> Option<i64> {
+        // Parse date in yyyy-MM-dd format
+        let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+        let datetime = date.and_hms_opt(23, 59, 59)?;
+        let timestamp = datetime.timestamp();
+        // Convert to Apple timestamp format (nanoseconds since 2001)
+        Some((timestamp - 978307200) * 1_000_000_000)
+    };
+
+    // Extract BEFORE date
+    if let Some(before_idx) = query.find("BEFORE:") {
+        let after_before = &query[before_idx + 7..];
+        if let Some(date_end) = after_before.find(' ') {
+            let date_str = &after_before[..date_end];
+            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
+                date_conditions.push(format!("m.date < {}", timestamp));
+                cleaned_query = cleaned_query.replace(&format!("BEFORE:{} ", date_str), "");
+            }
+        } else {
+            let date_str = after_before;
+            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
+                date_conditions.push(format!("m.date < {}", timestamp));
+                cleaned_query = cleaned_query.replace(&format!("BEFORE:{}", date_str), "");
+            }
+        }
+    }
+
+    // Extract AFTER date
+    if let Some(after_idx) = query.find("AFTER:") {
+        let after_after = &query[after_idx + 6..];
+        if let Some(date_end) = after_after.find(' ') {
+            let date_str = &after_after[..date_end];
+            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
+                date_conditions.push(format!("m.date > {}", timestamp));
+                cleaned_query = cleaned_query.replace(&format!("AFTER:{} ", date_str), "");
+            }
+        } else {
+            let date_str = after_after;
+            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
+                date_conditions.push(format!("m.date > {}", timestamp));
+                cleaned_query = cleaned_query.replace(&format!("AFTER:{}", date_str), "");
+            }
+        }
+    }
+
+    // If query is empty after removing date filters, we'll just fetch recent messages with date conditions
+    let cleaned_query = cleaned_query.trim();
+    if cleaned_query.is_empty() {
+        let mut sql = r#"
             SELECT 
                 m.ROWID as message_id,
                 m.text,
@@ -929,13 +981,18 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
                 chat_message_join cmj ON m.ROWID = cmj.message_id
             LEFT JOIN
                 handle h ON m.handle_id = h.ROWID
-            WHERE m.text IS NOT NULL  -- Add this to filter out empty messages
-            ORDER BY 
-                m.date DESC
-            LIMIT 100
-        "#;
+            WHERE m.text IS NOT NULL
+        "#.to_string();
 
-        let mut stmt = conn.prepare(sql)?;
+        // Add date conditions if any
+        if !date_conditions.is_empty() {
+            sql.push_str(" AND ");
+            sql.push_str(&date_conditions.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY m.date DESC LIMIT 100");
+
+        let mut stmt = conn.prepare(&sql)?;
         let message_iter = stmt.query_map([], |row| {
             let message_id: i64 = row.get(0)?;
             let text: Option<String> = row.get(1)?;
@@ -984,13 +1041,12 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             }
         }
 
-        println!("Found {} recent messages", messages.len());  // Debug log
+        println!("Found {} messages with date filters", messages.len());  // Debug log
         return Ok(SearchResult { messages });
     }
 
-    // Rest of the existing search logic for when query is not empty
-    // ... existing code ...
-
+    // TODO: Implement full text search with other filters
+    // For now, return empty results for non-date queries
     Ok(SearchResult {
         messages: Vec::new(),
     })

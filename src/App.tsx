@@ -83,10 +83,21 @@ function App() {
 			updatedMessages = updatedMessages.filter((msg) => msg.is_from_me)
 		}
 
+		if (searchParams?.showOnlyAttachments) {
+			updatedMessages = updatedMessages.filter(
+				(msg) => msg.attachment_path && msg.attachment_path !== ""
+			)
+		}
+
 		return {
 			messages: updatedMessages,
 		}
-	}, [searchResults, contacts, searchParams?.showOnlyMyMessages])
+	}, [
+		searchResults,
+		contacts,
+		searchParams?.showOnlyMyMessages,
+		searchParams?.showOnlyAttachments,
+	])
 
 	const generateConversationTitle = (
 		conversation: Conversation,
