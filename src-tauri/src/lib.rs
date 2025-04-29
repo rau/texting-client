@@ -896,11 +896,11 @@ struct SearchParams {
     sender_filters: Vec<String>,
     conversation_id: Option<String>,
     show_only_my_messages: bool,
-    show_only_attachments: bool,  // Add this new field
+    show_only_attachments: bool,
 }
 
 #[tauri::command]
-async fn search_messages(query: String) -> Result<SearchResult, AppError> {
+async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>) -> Result<SearchResult, AppError> {
     println!("Received search query: '{}'", query);  // Debug log
     
     let db_path = get_imessage_db_path()?;
@@ -990,6 +990,21 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             sql.push_str(&date_conditions.join(" AND "));
         }
 
+        // Add show_only_my_messages filter if enabled
+        if let Some(true) = show_only_my_messages {
+            sql.push_str(" AND m.is_from_me = 1");
+        }
+
+        // Add show_only_attachments filter if enabled
+        if let Some(true) = show_only_attachments {
+            sql.push_str(" AND EXISTS (
+                SELECT 1 
+                FROM attachment a 
+                JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+                WHERE maj.message_id = m.ROWID
+            )");
+        }
+
         sql.push_str(" ORDER BY m.date DESC LIMIT 100");
 
         let mut stmt = conn.prepare(&sql)?;
@@ -1041,7 +1056,7 @@ async fn search_messages(query: String) -> Result<SearchResult, AppError> {
             }
         }
 
-        println!("Found {} messages with date filters", messages.len());  // Debug log
+        println!("Found {} messages with filters", messages.len());  // Debug log
         return Ok(SearchResult { messages });
     }
 

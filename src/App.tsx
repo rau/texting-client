@@ -77,27 +77,10 @@ function App() {
 		if (!searchResults) return null
 
 		let updatedMessages = applyContactsToMessages(searchResults.messages)
-
-		// Filter messages if showOnlyMyMessages is enabled
-		if (searchParams?.showOnlyMyMessages) {
-			updatedMessages = updatedMessages.filter((msg) => msg.is_from_me)
-		}
-
-		if (searchParams?.showOnlyAttachments) {
-			updatedMessages = updatedMessages.filter(
-				(msg) => msg.attachment_path && msg.attachment_path !== ""
-			)
-		}
-
 		return {
 			messages: updatedMessages,
 		}
-	}, [
-		searchResults,
-		contacts,
-		searchParams?.showOnlyMyMessages,
-		searchParams?.showOnlyAttachments,
-	])
+	}, [searchResults, contacts])
 
 	const generateConversationTitle = (
 		conversation: Conversation,
@@ -265,18 +248,22 @@ function App() {
 		refreshData()
 	}, [refreshData])
 
-	// Combine loading states for overall app loading state
-	const isAppLoading = loading || contactsLoading
-
-	const searchMessages = useCallback(async (query: string) => {
-		try {
-			const results = await invoke("search_messages", { query })
-			console.log("Search results:", results)
-			setSearchResults(results as SearchResult)
-		} catch (error) {
-			console.error("Search failed:", error)
-		}
-	}, [])
+	const searchMessages = useCallback(
+		async (query: string) => {
+			try {
+				const results = await invoke("search_messages", {
+					query,
+					showOnlyMyMessages: searchParams?.showOnlyMyMessages,
+					showOnlyAttachments: searchParams?.showOnlyAttachments,
+				})
+				console.log("Search results:", results)
+				setSearchResults(results as SearchResult)
+			} catch (error) {
+				console.error("Search failed:", error)
+			}
+		},
+		[searchParams?.showOnlyMyMessages, searchParams?.showOnlyAttachments]
+	)
 
 	const handleSearch = useCallback(
 		async (params: SearchParams) => {
@@ -315,6 +302,32 @@ function App() {
 		},
 		[contacts, searchMessages]
 	)
+
+	// Effect to perform initial search and handle filter changes
+	useEffect(() => {
+		// If we have searchParams, use those, otherwise do a default empty search
+		if (searchParams) {
+			handleSearch(searchParams)
+		} else {
+			// Initial empty search with default params
+			handleSearch({
+				query: "",
+				selectedContacts: [],
+				startDate: undefined,
+				endDate: undefined,
+				selectedConversation: null,
+				showOnlyMyMessages: false,
+				showOnlyAttachments: false,
+			})
+		}
+	}, [
+		handleSearch,
+		searchParams?.showOnlyMyMessages,
+		searchParams?.showOnlyAttachments,
+	])
+
+	// Combine loading states for overall app loading state
+	const isAppLoading = loading || contactsLoading
 
 	return (
 		<div className='flex h-screen w-screen'>
