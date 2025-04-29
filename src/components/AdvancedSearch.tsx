@@ -76,6 +76,8 @@ export function AdvancedSearch({
 		showOnlyAttachments: false,
 		sortDirection: "desc",
 	})
+	const [showOnlyContactsWithPhotos, setShowOnlyContactsWithPhotos] =
+		useState(false)
 
 	// Add useEffect to trigger initial search
 	useEffect(() => {
@@ -84,12 +86,23 @@ export function AdvancedSearch({
 		onSearch(searchParams)
 	}, []) // Empty dependency array means this runs once when component mounts
 
-	// Collect all contacts from the contactMap and sort them alphabetically by name
+	// Updated contacts filtering to include photo filter
 	const contactsArray = useMemo(() => {
-		return contacts
-			.filter((contact) => contact.first_name?.trim() !== "") // Filter out empty names
-			.sort((a, b) => a.first_name?.localeCompare(b.first_name || "") || 0)
-	}, [contacts])
+		let filteredContacts = contacts.filter(
+			(contact) => contact.first_name?.trim() !== ""
+		) // Filter out empty names
+
+		// Apply photo filter if enabled
+		if (showOnlyContactsWithPhotos) {
+			filteredContacts = filteredContacts.filter(
+				(contact) => contact.photo?.full_photo
+			)
+		}
+
+		return filteredContacts.sort(
+			(a, b) => a.first_name?.localeCompare(b.first_name || "") || 0
+		)
+	}, [contacts, showOnlyContactsWithPhotos])
 
 	return (
 		<div className='w-80 border-r border-border flex flex-col'>
@@ -370,6 +383,41 @@ export function AdvancedSearch({
 							</Command>
 						</PopoverContent>
 					</Popover>
+				</div>
+
+				{/* Show Only Contacts with Photos Toggle */}
+				<div className='space-y-2 mb-4'>
+					<div className='flex items-center justify-between'>
+						<Label
+							htmlFor='show-contacts-with-photos'
+							className='text-sm font-medium'
+						>
+							Show Only Contacts with Photos
+						</Label>
+						<Switch
+							id='show-contacts-with-photos'
+							checked={showOnlyContactsWithPhotos}
+							onCheckedChange={(checked) => {
+								setShowOnlyContactsWithPhotos(checked)
+								setSearchParams((prev) => {
+									// If turning on the filter, remove selected contacts without photos
+									const newSelectedContacts = checked
+										? prev.selectedContacts.filter(
+												(contact) => contact.photo?.full_photo
+										  )
+										: prev.selectedContacts
+
+									const newParams = {
+										...prev,
+										showOnlyContactsWithPhotos: checked,
+										selectedContacts: newSelectedContacts,
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}}
+						/>
+					</div>
 				</div>
 
 				{/* Selected Contacts Display */}
