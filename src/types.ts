@@ -24,8 +24,8 @@ export type Contact = {
 	contact_id: string
 	emails: string[]
 	phones: string[]
-	first_name: string
-	last_name: string
+	first_name: string | undefined
+	last_name: string | undefined
 	nickname: string
 	organization: string
 	photo: ContactPhoto

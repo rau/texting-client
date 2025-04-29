@@ -87,8 +87,8 @@ export function AdvancedSearch({
 	// Collect all contacts from the contactMap and sort them alphabetically by name
 	const contactsArray = useMemo(() => {
 		return contacts
-			.filter((contact) => contact.first_name.trim() !== "") // Filter out empty names
-			.sort((a, b) => a.first_name.localeCompare(b.first_name))
+			.filter((contact) => contact.first_name?.trim() !== "") // Filter out empty names
+			.sort((a, b) => a.first_name?.localeCompare(b.first_name || "") || 0)
 	}, [contacts])
 
 	return (
@@ -338,9 +338,11 @@ export function AdvancedSearch({
 														/>
 														<AvatarFallback>
 															{contact.first_name
-																.split(" ")
-																.map((n) => n[0])
-																.join("")}
+																? contact.first_name
+																		.split(" ")
+																		.map((n) => n[0])
+																		.join("")
+																: ""}
 															{contact.last_name
 																? contact.last_name
 																		.split(" ")
@@ -390,9 +392,11 @@ export function AdvancedSearch({
 									/>
 									<AvatarFallback className='text-[10px]'>
 										{contact.first_name
-											.split(" ")
-											.map((n) => n[0])
-											.join("")}
+											? contact.first_name
+													.split(" ")
+													.map((n) => n[0])
+													.join("")
+											: ""}
 									</AvatarFallback>
 								</Avatar>
 								<span>{contact.first_name}</span>

@@ -35,7 +35,13 @@ function App() {
 		// For email addresses
 		if (senderId.includes("@")) {
 			const lowerEmail = senderId.toLowerCase()
-			return contacts.find((c) => c.emails.includes(lowerEmail))
+			const contact = contacts.find((c) => c.emails.includes(lowerEmail))
+			if (contact) {
+				// console.log("Contact found for email:", contact)
+				return contact
+			} else {
+				console.log("No contact found for email:", senderId)
+			}
 		}
 
 		// For phone numbers, strip non-numeric characters and try to match
@@ -50,13 +56,33 @@ function App() {
 			// Try matching last 10 digits if the number is longer
 			if (strippedNumber.length >= 10) {
 				const last10 = strippedNumber.slice(-10)
-				return contacts.find((c) =>
+				const contact = contacts.find((c) =>
 					c.phones.some((phone) => phone.endsWith(last10))
 				)
+				if (contact) return contact
 			}
 		}
 
-		return undefined
+		// If no contact found, create a placeholder contact with the sender ID
+		const contact = {
+			first_name: undefined,
+			last_name: undefined,
+			emails: senderId.includes("@") ? [senderId] : [],
+			phones: senderId.includes("@") ? [] : [senderId],
+			contact_id: "",
+			nickname: "",
+			organization: "",
+			photo: {
+				full_photo: "",
+				thumbnail: "",
+				legacy_photo: "",
+			},
+		}
+
+		// creating default contact for sender ID
+		console.log("Creating default contact for sender ID:", contact)
+
+		return contact
 	}
 
 	// Apply contacts to a specific set of messages
@@ -89,7 +115,7 @@ function App() {
 		if (conversation.name) {
 			const contact = getContactForSender(conversation.name)
 			if (contact) {
-				return contact.first_name
+				return contact.first_name || ""
 			}
 			return conversation.name
 		}
@@ -99,7 +125,9 @@ function App() {
 		messagesForConversation.forEach((message) => {
 			if (!message.is_from_me && message.sender_name) {
 				const contact = getContactForSender(message.sender_name)
-				participants.add(contact ? contact.first_name : message.sender_name)
+				participants.add(
+					contact ? contact.first_name || "" : message.sender_name
+				)
 			}
 		})
 

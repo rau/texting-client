@@ -835,18 +835,8 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
         // Get sender information
         let sender_id: Result<String, rusqlite::Error> = row.get(5);
         let sender_name = match sender_id {
-            Ok(id) if !is_from_me => {
-                // Extract name from phone number or email formats
-                let name = if id.contains("@") {
-                    // It's an email - use part before @
-                    id.split('@').next().unwrap_or(&id).to_string()
-                } else {
-                    // Format phone number or just use the ID
-                    id
-                };
-                Some(name)
-            },
-            _ => None, // No sender name for my messages or if sender_id is NULL
+            Ok(id) if !is_from_me => Some(id),
+            _ => None,
         };
 
         // Get attachment path
