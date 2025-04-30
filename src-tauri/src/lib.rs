@@ -855,8 +855,8 @@ struct SearchParams {
 }
 
 #[tauri::command]
-async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>, sort_direction: Option<String>) -> Result<SearchResult, AppError> {
-    println!("Received search query: '{}', sort direction: {:?}", query, sort_direction);  // Debug log
+async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>, sort_direction: Option<String>, conversation_id: Option<String>) -> Result<SearchResult, AppError> {
+    println!("Received search query: '{}', sort direction: {:?}, conversation_id: {:?}", query, sort_direction, conversation_id);  // Debug log
     
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
@@ -911,122 +911,125 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
         }
     }
 
-    // If query is empty after removing date filters, we'll just fetch recent messages with date conditions
-    let cleaned_query = cleaned_query.trim();
-    if cleaned_query.is_empty() {
-        let mut sql = r#"
-            SELECT 
-                m.ROWID as message_id,
-                m.text,
-                m.date,
-                m.is_from_me,
-                cmj.chat_id,
-                h.id as handle_id,
-                COALESCE(h.uncanonicalized_id, h.id) as sender_id,
-                (
-                    SELECT a.filename 
-                    FROM attachment a 
-                    JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
-                    WHERE maj.message_id = m.ROWID 
-                    LIMIT 1
-                ) as attachment_path
-            FROM 
-                message m
-            INNER JOIN 
-                chat_message_join cmj ON m.ROWID = cmj.message_id
-            LEFT JOIN
-                handle h ON m.handle_id = h.ROWID
-            WHERE m.text IS NOT NULL
-        "#.to_string();
-
-        // Add date conditions if any
-        if !date_conditions.is_empty() {
-            sql.push_str(" AND ");
-            sql.push_str(&date_conditions.join(" AND "));
-        }
-
-        // Add show_only_my_messages filter if enabled
-        if let Some(true) = show_only_my_messages {
-            sql.push_str(" AND m.is_from_me = 1");
-        }
-
-        // Add show_only_attachments filter if enabled
-        if let Some(true) = show_only_attachments {
-            sql.push_str(" AND EXISTS (
-                SELECT 1 
+    let mut sql = r#"
+        SELECT 
+            m.ROWID as message_id,
+            m.text,
+            m.date,
+            m.is_from_me,
+            cmj.chat_id,
+            h.id as handle_id,
+            COALESCE(h.uncanonicalized_id, h.id) as sender_id,
+            (
+                SELECT a.filename 
                 FROM attachment a 
                 JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
-                WHERE maj.message_id = m.ROWID
-            )");
-        }
+                WHERE maj.message_id = m.ROWID 
+                LIMIT 1
+            ) as attachment_path
+        FROM 
+            message m
+        INNER JOIN 
+            chat_message_join cmj ON m.ROWID = cmj.message_id
+        LEFT JOIN
+            handle h ON m.handle_id = h.ROWID
+        WHERE 1=1
+    "#.to_string();
 
-        // Add ORDER BY clause with sort direction
-        sql.push_str(" ORDER BY m.date ");
-        sql.push_str(match sort_direction.as_deref() {
-            Some("asc") => "ASC",
-            _ => "DESC"  // Default to DESC if not specified or any other value
-        });
-        sql.push_str(" LIMIT 100");
-
-        let mut stmt = conn.prepare(&sql)?;
-        let message_iter = stmt.query_map([], |row| {
-            let message_id: i64 = row.get(0)?;
-            let text: Option<String> = row.get(1)?;
-            
-            let date: Result<i64, rusqlite::Error> = row.get(2);
-            let date = match date {
-                Ok(date) => apple_time_to_unix(date / 1_000_000_000),
-                Err(_) => 0,
-            };
-            
-            let is_from_me: Result<i64, rusqlite::Error> = row.get(3);
-            let is_from_me = match is_from_me {
-                Ok(value) => value == 1,
-                Err(_) => false,
-            };
-
-            let chat_id: Result<i64, rusqlite::Error> = row.get(4);
-            let chat_id = match chat_id {
-                Ok(id) => Some(id.to_string()),
-                Err(_) => None,
-            };
-            
-            let sender_id: Result<String, rusqlite::Error> = row.get(6);
-            let sender_name = match sender_id {
-                Ok(id) if !is_from_me => Some(id),
-                _ => None,
-            };
-
-            let attachment_path: Option<String> = row.get(7).ok();
-            
-            Ok(Message {
-                id: message_id,
-                text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
-                date,
-                is_from_me,
-                chat_id,
-                sender_name,
-                attachment_path,
-                conversation_name: None,
-            })
-        })?;
-
-        let mut messages = Vec::new();
-        for message in message_iter {
-            if let Ok(msg) = message {
-                messages.push(msg);
-            }
-        }
-
-        println!("Found {} messages with filters", messages.len());  // Debug log
-        return Ok(SearchResult { messages });
+    // Add text search condition if query is not empty
+    let cleaned_query = cleaned_query.trim();
+    if !cleaned_query.is_empty() {
+        sql.push_str(&format!(" AND m.text LIKE '%{}%'", cleaned_query.replace('\'', "''")));
     }
 
-    // TODO: Implement full text search with other filters
-    // For now, return empty results for non-date queries
-    Ok(SearchResult {
-        messages: Vec::new(),
-    })
+    // Add conversation filter if provided
+    if let Some(conv_id) = conversation_id {
+        sql.push_str(&format!(" AND cmj.chat_id = {}", conv_id));
+    }
+
+    // Add date conditions if any
+    if !date_conditions.is_empty() {
+        sql.push_str(" AND ");
+        sql.push_str(&date_conditions.join(" AND "));
+    }
+
+    // Add show_only_my_messages filter if enabled
+    if let Some(true) = show_only_my_messages {
+        sql.push_str(" AND m.is_from_me = 1");
+    }
+
+    // Add show_only_attachments filter if enabled
+    if let Some(true) = show_only_attachments {
+        sql.push_str(" AND EXISTS (
+            SELECT 1 
+            FROM attachment a 
+            JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+            WHERE maj.message_id = m.ROWID
+        )");
+    }
+
+    // Add ORDER BY clause with sort direction
+    sql.push_str(" ORDER BY m.date ");
+    sql.push_str(match sort_direction.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC"  // Default to DESC if not specified or any other value
+    });
+    sql.push_str(" LIMIT 100");
+
+    println!("Executing SQL: {}", sql);  // Debug log
+
+    let mut stmt = conn.prepare(&sql)?;
+    let message_iter = stmt.query_map([], |row| {
+        let message_id: i64 = row.get(0)?;
+        let text: Option<String> = row.get(1)?;
+        
+        let date: Result<i64, rusqlite::Error> = row.get(2);
+        let date = match date {
+            Ok(date) => apple_time_to_unix(date / 1_000_000_000),
+            Err(_) => 0,
+        };
+        
+        let is_from_me: Result<i64, rusqlite::Error> = row.get(3);
+        let is_from_me = match is_from_me {
+            Ok(value) => value == 1,
+            Err(_) => false,
+        };
+
+        let chat_id: Result<i64, rusqlite::Error> = row.get(4);
+        let chat_id = match chat_id {
+            Ok(id) => Some(id.to_string()),
+            Err(_) => None,
+        };
+        
+        let sender_id: Result<String, rusqlite::Error> = row.get(6);
+        let sender_name = match sender_id {
+            Ok(id) if !is_from_me => Some(id),
+            _ => None,
+        };
+
+        let attachment_path: Option<String> = row.get(7).ok();
+        
+        Ok(Message {
+            id: message_id,
+            text: text.unwrap_or_else(|| "[Attachment or empty message]".to_string()),
+            date,
+            is_from_me,
+            chat_id,
+            sender_name,
+            attachment_path,
+            conversation_name: None,
+        })
+    })?;
+
+    let mut messages = Vec::new();
+    for message in message_iter {
+        if let Ok(msg) = message {
+            messages.push(msg);
+        }
+    }
+
+    println!("Found {} messages", messages.len());  // Debug log
+    Ok(SearchResult { messages })
 }
 
 // Add a new function to check permissions

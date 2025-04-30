@@ -500,62 +500,109 @@ export function AdvancedSearch({
 						Select Conversation
 					</Label>
 
-					<Popover>
-						<PopoverTrigger className='w-full'>
-							<Button
-								id='conversation-select'
-								type='button'
-								variant='outline'
-								role='combobox'
-								className={cn(
-									"justify-between w-full border-border hover:cursor-pointer hover:text-primary font-normal",
-									!searchParams.selectedConversation && "text-muted-foreground"
+					{searchParams.selectedConversation ? (
+						<Badge
+							variant='secondary'
+							className='w-full flex items-center justify-between py-2 px-3 h-10'
+						>
+							<div className='flex items-center gap-2'>
+								{searchParams.selectedConversation.participants.length <= 1 ? (
+									<MessageCircle className='h-4 w-4' />
+								) : (
+									<Users2 className='h-4 w-4' />
 								)}
+								<span>{searchParams.selectedConversation.name}</span>
+							</div>
+							<Button
+								variant='ghost'
+								size='icon'
+								className='h-5 w-5 p-0 hover:bg-muted'
+								onClick={(e) => {
+									e.preventDefault()
+									e.stopPropagation()
+									// Create new params object with conversation cleared
+									const newParams: SearchParams = {
+										...searchParams,
+										selectedConversation: null,
+									}
+									// Update local state
+									setSearchParams(newParams)
+									// Trigger parent search immediately with new params
+									onSearch(newParams)
+									console.log("Cleared conversation, new params:", newParams) // Debug log
+								}}
 							>
-								{searchParams.selectedConversation
-									? searchParams.selectedConversation.name
-									: "Select conversation"}
-								<ChevronDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
+								<X className='h-3 w-3' />
+								<span className='sr-only'>Clear conversation selection</span>
 							</Button>
-						</PopoverTrigger>
-						<PopoverContent className='w-full p-0' align='start' side='bottom'>
-							<Command className='w-[400px]'>
-								<CommandInput placeholder='Search conversations...' />
-								<CommandList>
-									<CommandEmpty>No conversations found.</CommandEmpty>
-									<CommandGroup>
-										{filteredConversations.map((conversation) => (
-											<CommandItem
-												key={conversation.id}
-												onSelect={() => {
-													setSearchParams((prev) => {
-														const newParams = {
-															...prev,
-															selectedConversation: conversation,
-														}
-														onSearch(newParams)
-														return newParams
-													})
-												}}
-												className='flex items-center gap-2 cursor-pointer'
-											>
-												<div className='flex flex-col'>
-													<span className='font-medium'>
-														{conversation.name}
-													</span>
-													<span className='text-xs text-muted-foreground'>
-														{conversation.participants.length <= 1
-															? "Direct Message"
-															: `${conversation.participants.length} participants`}
-													</span>
-												</div>
-											</CommandItem>
-										))}
-									</CommandGroup>
-								</CommandList>
-							</Command>
-						</PopoverContent>
-					</Popover>
+						</Badge>
+					) : (
+						<Popover>
+							<PopoverTrigger className='w-full'>
+								<Button
+									id='conversation-select'
+									type='button'
+									variant='outline'
+									role='combobox'
+									className={cn(
+										"justify-between w-full border-border hover:cursor-pointer hover:text-primary font-normal",
+										"text-muted-foreground"
+									)}
+								>
+									Select conversation
+									<ChevronDown className='ml-2 h-4 w-4 shrink-0 opacity-50' />
+								</Button>
+							</PopoverTrigger>
+							<PopoverContent
+								className='w-full p-0'
+								align='start'
+								side='bottom'
+							>
+								<Command className='w-[400px]'>
+									<CommandInput placeholder='Search conversations...' />
+									<CommandList>
+										<CommandEmpty>No conversations found.</CommandEmpty>
+										<CommandGroup>
+											{filteredConversations.map((conversation) => (
+												<CommandItem
+													key={conversation.id}
+													onSelect={() => {
+														setSearchParams((prev) => {
+															const newParams = {
+																...prev,
+																selectedConversation: conversation,
+															}
+															onSearch(newParams)
+															return newParams
+														})
+													}}
+													className='flex items-center gap-2 cursor-pointer'
+												>
+													<div className='flex items-center gap-2'>
+														{conversation.participants.length <= 1 ? (
+															<MessageCircle className='h-4 w-4' />
+														) : (
+															<Users2 className='h-4 w-4' />
+														)}
+														<div className='flex flex-col'>
+															<span className='font-medium'>
+																{conversation.name}
+															</span>
+															<span className='text-xs text-muted-foreground'>
+																{conversation.participants.length <= 1
+																	? "Direct Message"
+																	: `${conversation.participants.length} participants`}
+															</span>
+														</div>
+													</div>
+												</CommandItem>
+											))}
+										</CommandGroup>
+									</CommandList>
+								</Command>
+							</PopoverContent>
+						</Popover>
+					)}
 					<ToggleGroup
 						type='single'
 						value={searchParams.conversationType}

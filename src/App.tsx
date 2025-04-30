@@ -299,28 +299,6 @@ function App() {
 		refreshData()
 	}, [refreshData])
 
-	const searchMessages = useCallback(
-		async (query: string) => {
-			try {
-				const results = await invoke("search_messages", {
-					query,
-					showOnlyMyMessages: searchParams?.showOnlyMyMessages,
-					showOnlyAttachments: searchParams?.showOnlyAttachments,
-					sortDirection: searchParams?.sortDirection,
-				})
-				console.log("Search results:", results)
-				setSearchResults(results as SearchResult)
-			} catch (error) {
-				console.error("Search failed:", error)
-			}
-		},
-		[
-			searchParams?.showOnlyMyMessages,
-			searchParams?.showOnlyAttachments,
-			searchParams?.sortDirection,
-		]
-	)
-
 	const handleSearch = useCallback(
 		async (params: SearchParams) => {
 			// Store the search params for filtering
@@ -349,14 +327,21 @@ function App() {
 				query += ` BEFORE:${format(params.endDate, "yyyy-MM-dd")}`
 			}
 
-			// Add conversation filter
-			if (params.selectedConversation) {
-				query += ` CONVERSATION:${params.selectedConversation.id}`
+			try {
+				const results = await invoke("search_messages", {
+					query: query.trim(),
+					showOnlyMyMessages: params.showOnlyMyMessages,
+					showOnlyAttachments: params.showOnlyAttachments,
+					sortDirection: params.sortDirection,
+					conversationId: params.selectedConversation?.id,
+				})
+				console.log("Search results:", results)
+				setSearchResults(results as SearchResult)
+			} catch (error) {
+				console.error("Search failed:", error)
 			}
-
-			await searchMessages(query.trim())
 		},
-		[contacts, searchMessages]
+		[contacts]
 	)
 
 	// Effect to perform initial search and handle filter changes
