@@ -304,36 +304,54 @@ function App() {
 			// Store the search params for filtering
 			setSearchParams(params)
 
-			let query = params.query
-
-			// Add FROM: filters for selected contacts
-			if (params.selectedContacts.length > 0) {
-				const fromQueries = params.selectedContacts.map((contact) => {
-					// Get all contacts with the same name
+			try {
+				// Convert selected contacts to contact identifiers
+				const contactIdentifiers = params.selectedContacts.map((contact) => {
+					// Find all related contacts with the same name to get all their identifiers
 					const relatedContacts =
 						contacts?.filter((c) => c.first_name === contact.first_name) || []
-					// Create FROM: queries for each contact value
-					return relatedContacts.map((c) => `FROM:${c.phones[0]}`).join(" OR ")
+
+					// Combine all identifiers from related contacts
+					return relatedContacts.reduce(
+						(acc, c) => {
+							return {
+								contact_id: c.contact_id ? c.contact_id.toString() : undefined,
+								phones: [...acc.phones, ...c.phones],
+								emails: [...acc.emails, ...c.emails],
+							}
+						},
+						{
+							contact_id: undefined as string | undefined,
+							phones: [] as string[],
+							emails: [] as string[],
+						}
+					)
 				})
-				// Join all contact queries with OR and wrap in parentheses
-				query = `${query} (${fromQueries.map((q) => `(${q})`).join(" OR ")})`
-			}
 
-			// Add date range filters
-			if (params.startDate) {
-				query += ` AFTER:${format(params.startDate, "yyyy-MM-dd")}`
-			}
-			if (params.endDate) {
-				query += ` BEFORE:${format(params.endDate, "yyyy-MM-dd")}`
-			}
+				// Convert dates to string format
+				const startDate = params.startDate
+					? format(params.startDate, "yyyy-MM-dd")
+					: undefined
+				const endDate = params.endDate
+					? format(params.endDate, "yyyy-MM-dd")
+					: undefined
 
-			try {
+				// Create search parameters object
+				const searchParams = {
+					query: params.query.trim(),
+					start_date: startDate,
+					end_date: endDate,
+					contact_identifiers: contactIdentifiers,
+					conversation_id: params.selectedConversation?.id,
+					show_only_my_messages: params.showOnlyMyMessages,
+					show_only_attachments: params.showOnlyAttachments,
+					sort_direction: params.sortDirection,
+					conversation_type: params.conversationType,
+				}
+
+				console.log("Search params:", searchParams)
 				const results = await invoke("search_messages", {
-					query: query.trim(),
-					showOnlyMyMessages: params.showOnlyMyMessages,
-					showOnlyAttachments: params.showOnlyAttachments,
-					sortDirection: params.sortDirection,
-					conversationId: params.selectedConversation?.id,
+					params: searchParams,
 				})
 				console.log("Search results:", results)
 				setSearchResults(results as SearchResult)

@@ -844,75 +844,39 @@ impl rusqlite::ToSql for SqlParam {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct ContactIdentifier {
+    contact_id: Option<String>,
+    phones: Vec<String>,
+    emails: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct SearchParams {
     query: String,
-    start_timestamp: Option<i64>,
-    end_timestamp: Option<i64>,
-    sender_filters: Vec<String>,
+    start_date: Option<String>,  // yyyy-MM-dd format
+    end_date: Option<String>,    // yyyy-MM-dd format
+    contact_identifiers: Vec<ContactIdentifier>,
     conversation_id: Option<String>,
     show_only_my_messages: bool,
     show_only_attachments: bool,
+    sort_direction: String,      // "asc" or "desc"
+    conversation_type: String,   // "all", "direct", or "group"
+}
+
+// Add this helper function at the top level, before search_messages
+fn normalize_phone_number(phone: &str) -> String {
+    phone.chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
 #[tauri::command]
-async fn search_messages(query: String, show_only_my_messages: Option<bool>, show_only_attachments: Option<bool>, sort_direction: Option<String>, conversation_id: Option<String>) -> Result<SearchResult, AppError> {
-    println!("Received search query: '{}', sort direction: {:?}, conversation_id: {:?}", query, sort_direction, conversation_id);  // Debug log
+async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError> {
+    println!("Received search params: {:?}", params);
     
     let db_path = get_imessage_db_path()?;
     let conn = Connection::open(&db_path).map_err(AppError::DatabaseConnectionError)?;
 
-    // Parse BEFORE and AFTER dates from query
-    let mut date_conditions = Vec::new();
-    let mut cleaned_query = query.clone();
-
-    // Helper function to convert date to Apple timestamp
-    let date_to_apple_timestamp = |date_str: &str| -> Option<i64> {
-        // Parse date in yyyy-MM-dd format
-        let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
-        let datetime = date.and_hms_opt(23, 59, 59)?;
-        let timestamp = datetime.timestamp();
-        // Convert to Apple timestamp format (nanoseconds since 2001)
-        Some((timestamp - 978307200) * 1_000_000_000)
-    };
-
-    // Extract BEFORE date
-    if let Some(before_idx) = query.find("BEFORE:") {
-        let after_before = &query[before_idx + 7..];
-        if let Some(date_end) = after_before.find(' ') {
-            let date_str = &after_before[..date_end];
-            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
-                date_conditions.push(format!("m.date < {}", timestamp));
-                cleaned_query = cleaned_query.replace(&format!("BEFORE:{} ", date_str), "");
-            }
-        } else {
-            let date_str = after_before;
-            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
-                date_conditions.push(format!("m.date < {}", timestamp));
-                cleaned_query = cleaned_query.replace(&format!("BEFORE:{}", date_str), "");
-            }
-        }
-    }
-
-    // Extract AFTER date
-    if let Some(after_idx) = query.find("AFTER:") {
-        let after_after = &query[after_idx + 6..];
-        if let Some(date_end) = after_after.find(' ') {
-            let date_str = &after_after[..date_end];
-            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
-                date_conditions.push(format!("m.date > {}", timestamp));
-                cleaned_query = cleaned_query.replace(&format!("AFTER:{} ", date_str), "");
-            }
-        } else {
-            let date_str = after_after;
-            if let Some(timestamp) = date_to_apple_timestamp(date_str) {
-                date_conditions.push(format!("m.date > {}", timestamp));
-                cleaned_query = cleaned_query.replace(&format!("AFTER:{}", date_str), "");
-            }
-        }
-    }
-
     let mut sql = r#"
-        SELECT 
+        SELECT DISTINCT
             m.ROWID as message_id,
             m.text,
             m.date,
@@ -936,30 +900,92 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
         WHERE 1=1
     "#.to_string();
 
-    // Add text search condition if query is not empty
-    let cleaned_query = cleaned_query.trim();
-    if !cleaned_query.is_empty() {
-        sql.push_str(&format!(" AND m.text LIKE '%{}%'", cleaned_query.replace('\'', "''")));
+    // Add text search if query is not empty
+    if !params.query.trim().is_empty() {
+        sql.push_str(&format!(" AND m.text LIKE '%{}%'", params.query.replace('\'', "''")));
+    }
+
+    // Add contact identifier filters if any exist
+    if !params.contact_identifiers.is_empty() {
+        let mut conditions = Vec::new();
+        
+        for identifier in &params.contact_identifiers {
+            let mut identifier_conditions = Vec::new();
+            
+            // Add contact_id condition if it exists
+            if let Some(contact_id) = &identifier.contact_id {
+                let escaped_id = contact_id.replace('\'', "''");
+                identifier_conditions.push(format!(
+                    "(h.id = '{}' OR h.uncanonicalized_id = '{}')",
+                    escaped_id, escaped_id
+                ));
+            }
+            
+            // Add phone conditions with more flexible matching
+            for phone in &identifier.phones {
+                let numeric_phone = normalize_phone_number(phone);
+                if !numeric_phone.is_empty() {
+                    let last_10 = if numeric_phone.len() > 10 {
+                        numeric_phone[numeric_phone.len()-10..].to_string()
+                    } else {
+                        numeric_phone
+                    };
+                    
+                    identifier_conditions.push(format!(
+                        "(
+                            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(h.id, '+', ''), '-', ''), ' ', ''), '(', ''), ')', '') LIKE '%{}' OR 
+                            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(h.uncanonicalized_id, '+', ''), '-', ''), ' ', ''), '(', ''), ')', '') LIKE '%{}'
+                        )",
+                        last_10, last_10
+                    ));
+                }
+            }
+            
+            // Add email conditions (keep as is since emails are exact matches)
+            for email in &identifier.emails {
+                let escaped_email = email.replace('\'', "''");
+                identifier_conditions.push(format!(
+                    "(h.id = '{}' OR h.uncanonicalized_id = '{}')",
+                    escaped_email, escaped_email
+                ));
+            }
+            
+            if !identifier_conditions.is_empty() {
+                conditions.push(format!("({})", identifier_conditions.join(" OR ")));
+            }
+        }
+        
+        if !conditions.is_empty() {
+            sql.push_str(" AND (");
+            sql.push_str(&conditions.join(" OR "));
+            sql.push_str(")");
+        }
     }
 
     // Add conversation filter if provided
-    if let Some(conv_id) = conversation_id {
+    if let Some(conv_id) = params.conversation_id {
         sql.push_str(&format!(" AND cmj.chat_id = {}", conv_id));
     }
 
-    // Add date conditions if any
-    if !date_conditions.is_empty() {
-        sql.push_str(" AND ");
-        sql.push_str(&date_conditions.join(" AND "));
+    // Add date filters
+    if let Some(start_date) = params.start_date {
+        if let Some(timestamp) = date_to_apple_timestamp(&start_date) {
+            sql.push_str(&format!(" AND m.date > {}", timestamp));
+        }
+    }
+    if let Some(end_date) = params.end_date {
+        if let Some(timestamp) = date_to_apple_timestamp(&end_date) {
+            sql.push_str(&format!(" AND m.date < {}", timestamp));
+        }
     }
 
-    // Add show_only_my_messages filter if enabled
-    if let Some(true) = show_only_my_messages {
+    // Add show_only_my_messages filter
+    if params.show_only_my_messages {
         sql.push_str(" AND m.is_from_me = 1");
     }
 
-    // Add show_only_attachments filter if enabled
-    if let Some(true) = show_only_attachments {
+    // Add show_only_attachments filter
+    if params.show_only_attachments {
         sql.push_str(" AND EXISTS (
             SELECT 1 
             FROM attachment a 
@@ -968,15 +994,33 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
         )");
     }
 
-    // Add ORDER BY clause with sort direction
+    // Add conversation type filter
+    if params.conversation_type != "all" {
+        sql.push_str(" AND EXISTS (
+            SELECT 1
+            FROM chat c
+            WHERE c.ROWID = cmj.chat_id
+            AND (
+                SELECT COUNT(DISTINCT h2.id)
+                FROM chat_handle_join chj2
+                JOIN handle h2 ON h2.ROWID = chj2.handle_id
+                WHERE chj2.chat_id = c.ROWID
+            ) ");
+        
+        if params.conversation_type == "direct" {
+            sql.push_str(" <= 1");
+        } else {
+            sql.push_str(" > 1");
+        }
+        sql.push_str(")");
+    }
+
+    // Add ORDER BY clause
     sql.push_str(" ORDER BY m.date ");
-    sql.push_str(match sort_direction.as_deref() {
-        Some("asc") => "ASC",
-        _ => "DESC"  // Default to DESC if not specified or any other value
-    });
+    sql.push_str(&params.sort_direction.to_uppercase());
     sql.push_str(" LIMIT 100");
 
-    println!("Executing SQL: {}", sql);  // Debug log
+    println!("Executing SQL: {}", sql);
 
     let mut stmt = conn.prepare(&sql)?;
     let message_iter = stmt.query_map([], |row| {
@@ -1028,8 +1072,18 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
         }
     }
 
-    println!("Found {} messages", messages.len());  // Debug log
+    println!("Found {} messages", messages.len());
     Ok(SearchResult { messages })
+}
+
+// Helper function to convert date string to Apple timestamp
+fn date_to_apple_timestamp(date_str: &str) -> Option<i64> {
+    // Parse date in yyyy-MM-dd format
+    let date = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+    let datetime = date.and_hms_opt(23, 59, 59)?;
+    let timestamp = datetime.timestamp();
+    // Convert to Apple timestamp format (nanoseconds since 2001)
+    Some((timestamp - 978307200) * 1_000_000_000)
 }
 
 // Add a new function to check permissions
