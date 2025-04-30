@@ -8,6 +8,11 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rusqlite::OptionalExtension;
 use chrono;
 use std::process::Command;
+use log::{info, error, warn};
+use simplelog::*;
+use std::fs::File;
+use std::time::Duration;
+use std::thread;
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -162,39 +167,63 @@ impl serde::Serialize for AppError {
 }
 
 fn get_imessage_db_path() -> Result<PathBuf, AppError> {
-    // On macOS, the iMessage db is in ~/Library/Messages/chat.db
-    let home = dirs::home_dir().ok_or(AppError::OtherError("Home directory not found".to_string()))?;
-    let db_path = home.join("Library/Messages/chat.db");
+    info!("Entering get_imessage_db_path");
     
+    // On macOS, the iMessage db is in ~/Library/Messages/chat.db
+    let home = match dirs::home_dir() {
+        Some(path) => {
+            info!("Found home directory: {:?}", path);
+            path
+        },
+        None => {
+            error!("Failed to get home directory");
+            return Err(AppError::OtherError("Home directory not found".to_string()));
+        }
+    };
+    
+    let db_path = home.join("Library/Messages/chat.db");
+    info!("Checking database path: {:?}", db_path);
     
     if !db_path.exists() {
-        println!("Database file not found at {:?}", db_path);
+        error!("Database file not found at {:?}", db_path);
         return Err(AppError::DatabaseNotFound);
     }
     
+    info!("Database file exists, checking if readable");
     
-    // Check if we can read the database
-    // If not, we'll need to copy it to a temporary location with proper permissions
-    match Connection::open(&db_path) {
-        Ok(_) => {
-            Ok(db_path)
-        },
-        Err(_e) => {
-            // Create a temporary copy we can read
-            let temp_dir = std::env::temp_dir();
-            let temp_db_path = temp_dir.join("imessage_temp.db");
-            
-            // Copy the file
-            match fs::copy(&db_path, &temp_db_path) {
-                Ok(_) => {
-                    println!("Successfully copied database to temporary location");
-                    Ok(temp_db_path)
-                },
-                Err(e) => {
-                    println!("Failed to copy database: {:?}", e);
-                    Err(AppError::IOError(e))
+    // First, check if we have Full Disk Access using ls command
+    info!("Checking Full Disk Access permission using ls command");
+    let output = Command::new("ls")
+        .arg("-l")
+        .arg(&db_path)
+        .output();
+    
+    match output {
+        Ok(output) => {
+            if output.status.success() {
+                info!("Full Disk Access appears to be granted, ls command succeeded");
+                // Try to open the database directly first
+                info!("Attempting to open database directly");
+                match Connection::open(&db_path) {
+                    Ok(_) => {
+                        info!("Successfully opened database at {:?}", db_path);
+                        Ok(db_path)
+                    },
+                    Err(e) => {
+                        warn!("Could not open database directly: {:?}", e);
+                        error!("Even with Full Disk Access, cannot open database directly. This might be a sandboxing issue.");
+                        Err(AppError::PermissionError("Full Disk Access is granted but database cannot be opened directly. Please check if the app is running in a sandbox.".to_string()))
+                    }
                 }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                error!("Full Disk Access check failed. ls command output: {}", stderr);
+                Err(AppError::PermissionError("Full Disk Access permission is required. Please grant Full Disk Access to the app in System Settings > Privacy & Security > Full Disk Access.".to_string()))
             }
+        },
+        Err(e) => {
+            error!("Failed to execute ls command: {:?}", e);
+            Err(AppError::PermissionError("Could not verify Full Disk Access permission. Please grant Full Disk Access to the app in System Settings > Privacy & Security > Full Disk Access.".to_string()))
         }
     }
 }
@@ -1086,43 +1115,202 @@ fn date_to_apple_timestamp(date_str: &str) -> Option<i64> {
     Some((timestamp - 978307200) * 1_000_000_000)
 }
 
-// Add a new function to check permissions
-#[tauri::command]
-async fn check_permissions() -> Result<bool, AppError> {
-    // Check Messages database access
-    let messages_result = get_imessage_db_path().and_then(|path| {
-        Connection::open(&path)
-            .map_err(|e| {
-                if e.to_string().contains("unable to open database file") {
-                    AppError::PermissionError("No access to Messages".to_string())
-                } else {
-                    AppError::DatabaseConnectionError(e)
-                }
-            })
-    });
+// Add this function at the top level
+fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let log_path = home.join("Library/Logs/iMessage Search/app.log");
 
-    // Check Contacts database access
-    let contacts_result = {
-        let home = dirs::home_dir()
-            .ok_or(AppError::OtherError("Home directory not found".to_string()))?;
-        let sources_dir = home.join("Library/Application Support/AddressBook/Sources");
-        
-        if !sources_dir.exists() {
-            Err(AppError::PermissionError("No access to Contacts".to_string()))
-        } else {
-            // Try to read the directory
-            match fs::read_dir(&sources_dir) {
-                Ok(_) => Ok(()),
-                Err(_) => Err(AppError::PermissionError("No access to Contacts".to_string()))
+    // Create the directory if it doesn't exist
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Initialize the logger
+    CombinedLogger::init(vec![
+        WriteLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            File::create(&log_path)?
+        ),
+    ])?;
+
+    info!("Logging initialized. Log file: {:?}", log_path);
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // Set up logging first
+    if let Err(e) = setup_logging() {
+        eprintln!("Failed to set up logging: {}", e);
+    }
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            get_conversations,
+            get_messages,
+            search_messages,
+            read_contacts,
+            check_permissions,
+            open_imessage_conversation,
+            restart_app
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+// Add these helper functions before check_permissions
+fn check_contacts_permission() -> Result<bool, AppError> {
+    info!("Checking Contacts permission...");
+    
+    // First try the AppleScript way to request contacts access
+    let script = r#"
+        tell application "System Events"
+            try
+                tell current application to get the address book
+                return true
+            on error
+                return false
+            end try
+        end tell
+    "#;
+
+    match Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+    {
+        Ok(output) => {
+            info!("AppleScript contacts check output: {:?}", output);
+            if output.status.success() {
+                info!("Contacts permission granted via AppleScript");
+                return Ok(true);
+            }
+        },
+        Err(e) => {
+            warn!("AppleScript contacts check failed: {:?}", e);
+        }
+    }
+
+    // Fallback to direct file system check
+    let home = dirs::home_dir()
+        .ok_or(AppError::OtherError("Home directory not found".to_string()))?;
+    let sources_dir = home.join("Library/Application Support/AddressBook/Sources");
+    info!("Checking Contacts directory: {:?}", sources_dir);
+    
+    if !sources_dir.exists() {
+        warn!("Contacts directory does not exist at: {:?}", sources_dir);
+        return Ok(false);
+    }
+
+    match fs::read_dir(&sources_dir) {
+        Ok(_) => {
+            info!("Successfully read Contacts directory");
+            Ok(true)
+        },
+        Err(e) => {
+            error!("Failed to read Contacts directory: {:?}", e);
+            Ok(false)
+        }
+    }
+}
+
+fn check_messages_permission() -> Result<bool, AppError> {
+    info!("Starting Messages permission check");
+    info!("Attempting to get iMessage database path");
+    
+    match get_imessage_db_path() {
+        Ok(path) => {
+            info!("Successfully got Messages database path: {:?}", path);
+            info!("Attempting to open database connection");
+            match Connection::open(&path) {
+                Ok(_) => {
+                    info!("Successfully opened Messages database");
+                    Ok(true)
+                },
+                Err(e) => {
+                    error!("Failed to open Messages database: {:?}", e);
+                    error!("Error details: {:#?}", e);
+                    if e.to_string().contains("unable to open database file") {
+                        info!("Error indicates permission issue");
+                        Ok(false)
+                    } else {
+                        error!("Unexpected database error");
+                        Err(AppError::DatabaseConnectionError(e))
+                    }
+                }
+            }
+        },
+        Err(e) => {
+            error!("Failed to get Messages database path: {:?}", e);
+            error!("Error details: {:#?}", e);
+            match e {
+                AppError::DatabaseNotFound => {
+                    info!("Database not found, likely permission issue");
+                    Ok(false)
+                },
+                _ => {
+                    error!("Unexpected error while getting database path");
+                    Err(e)
+                }
             }
         }
-    };
+    }
+}
 
-    match (messages_result, contacts_result) {
-        (Ok(_), Ok(_)) => Ok(true),
-        (Err(AppError::PermissionError(_)), _) | (_, Err(AppError::PermissionError(_))) => Ok(false),
-        (Err(e), _) => Err(e),
-        (_, Err(e)) => Err(e),
+// Update the check_permissions function
+#[tauri::command]
+async fn check_permissions() -> Result<bool, AppError> {
+    info!("Starting full permissions check...");
+    info!("Adding delay to prevent rapid rechecking...");
+    
+    // Add a small delay to prevent rapid rechecking
+    thread::sleep(Duration::from_millis(500));
+    
+    info!("Starting Messages permission check...");
+    let messages_result = match check_messages_permission() {
+        Ok(result) => {
+            info!("Messages permission check completed with result: {}", result);
+            result
+        },
+        Err(e) => {
+            error!("Messages permission check failed with error: {:?}", e);
+            error!("Error details: {:#?}", e);
+            return Ok(false);
+        }
+    };
+    
+    if !messages_result {
+        warn!("Messages permission not granted");
+        return Ok(false);
+    }
+    
+    info!("Messages permission granted, checking Contacts permission...");
+    let contacts_result = match check_contacts_permission() {
+        Ok(result) => {
+            info!("Contacts permission check completed with result: {}", result);
+            result
+        },
+        Err(e) => {
+            error!("Contacts permission check failed with error: {:?}", e);
+            error!("Error details: {:#?}", e);
+            return Ok(false);
+        }
+    };
+    
+    if messages_result && contacts_result {
+        info!("All permissions granted successfully");
+        Ok(true)
+    } else {
+        let missing = match (messages_result, contacts_result) {
+            (false, false) => "Messages and Contacts",
+            (false, true) => "Messages",
+            (true, false) => "Contacts",
+            (true, true) => unreachable!(),
+        };
+        warn!("Missing permissions for: {}", missing);
+        Ok(false)
     }
 }
 
@@ -1161,19 +1349,10 @@ async fn open_imessage_conversation(chat_id: String) -> Result<(), AppError> {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
-            get_conversations,
-            get_messages,
-            search_messages,
-            read_contacts,
-            check_permissions,
-            open_imessage_conversation
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+// Add a new command to force quit the app
+#[tauri::command]
+async fn restart_app(app_handle: tauri::AppHandle) {
+    info!("Restarting app...");
+    app_handle.restart();
 }
 

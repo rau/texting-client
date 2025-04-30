@@ -13,6 +13,7 @@
         ]
       }
     },
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "iMessage Search",
@@ -45,8 +46,10 @@
     "macOS": {
       "minimumSystemVersion": "10.15",
       "exceptionDomain": "",
-      "signingIdentity": null,
-      "entitlements": null
+      "signingIdentity": "-",
+      "entitlements": "entitlements.plist",
+      "providerShortName": null,
+      "frameworks": []
     }
   },
   "plugins": {
