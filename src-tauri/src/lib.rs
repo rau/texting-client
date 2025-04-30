@@ -115,6 +115,7 @@ pub enum AppError {
     DatabaseQueryError(rusqlite::Error),
     IOError(std::io::Error),
     SerializationError(serde_json::Error),
+    PermissionError(String),
     OtherError(String),
 }
 
@@ -126,6 +127,7 @@ impl fmt::Display for AppError {
             AppError::DatabaseQueryError(e) => write!(f, "Database query error: {}", e),
             AppError::IOError(e) => write!(f, "IO error: {}", e),
             AppError::SerializationError(e) => write!(f, "Serialization error: {}", e),
+            AppError::PermissionError(s) => write!(f, "Permission error: {}", s),
             AppError::OtherError(s) => write!(f, "Other error: {}", s),
         }
     }
@@ -205,64 +207,44 @@ fn apple_time_to_unix(apple_time: i64) -> i64 {
 
 // Function to find the AddressBook database
 fn get_addressbook_db_path() -> Result<PathBuf, AppError> {
-    // Check for the local AddressBook-v22.db file in the project root
-    let current_dir = std::env::current_dir().map_err(AppError::IOError)?;
-    
-    // Try multiple potential locations
-    let potential_paths = vec![
-        // Current directory
-        current_dir.join("AddressBook-v22.db"),
-        // Parent directory (if running from src-tauri)
-        current_dir.parent()
-            .map(|p| p.join("AddressBook-v22.db"))
-            .unwrap_or_else(|| PathBuf::from("../AddressBook-v22.db")),
-        // Explicit paths for macOS
-        PathBuf::from("/Users/raunak/Documents/texting-client/AddressBook-v22.db"),
-        // Relative paths that might work
-        PathBuf::from("./AddressBook-v22.db"),
-        PathBuf::from("../AddressBook-v22.db"),
-    ];
-    
-    // Try each potential path
-    for path in &potential_paths {
-        if path.exists() {
-            return Ok(path.clone());
-        }
-    }
-    
-    // Fallback to the macOS locations if the local file doesn't exist
+    // Get the Sources directory path
     let home = dirs::home_dir().ok_or(AppError::OtherError("Home directory not found".to_string()))?;
-    
-    // Try the direct path first (older macOS)
-    let direct_path = home.join("Library/Application Support/AddressBook/AddressBook-v22.abcddb");
-    if direct_path.exists() {
-        // IMPORTANT: We're going to disable this path to force use of local file
-        return Err(AppError::OtherError("System AddressBook path is disabled. Please use local file.".to_string()));
-    }
-    
-    // Try the Sources directory (newer macOS)
     let sources_dir = home.join("Library/Application Support/AddressBook/Sources");
+    
     if sources_dir.exists() {
         // Read all subdirectories in Sources (UUIDs)
         let entries = fs::read_dir(&sources_dir).map_err(AppError::IOError)?;
         
-        // Check each UUID directory
+        // Find the UUID directory containing AddressBook-v22.abcddb
         for entry in entries {
             let entry = entry.map_err(AppError::IOError)?;
             let path = entry.path();
             
             if path.is_dir() {
-                // Look for AddressBook-v22.abcddb in this UUID directory
-                let db_path = path.join("AddressBook-v22.abcddb");
-                if db_path.exists() {
-                    // IMPORTANT: We're going to disable this path to force use of local file
-                    return Err(AppError::OtherError("System AddressBook path is disabled. Please use local file.".to_string()));
+                let abcddb_path = path.join("AddressBook-v22.abcddb");
+                let db_path = path.join("AddressBook-v22.db");
+                
+                if abcddb_path.exists() {
+                    println!("Found system AddressBook at: {:?}", abcddb_path);
+                    
+                    // Always copy to create/update the .db version
+                    match fs::copy(&abcddb_path, &db_path) {
+                        Ok(_) => {
+                            println!("Successfully copied AddressBook database to: {:?}", db_path);
+                            return Ok(db_path);
+                        },
+                        Err(e) => {
+                            println!("Failed to copy AddressBook database: {:?}", e);
+                            return Err(AppError::IOError(e));
+                        }
+                    }
                 }
             }
         }
     }
     
-    Err(AppError::OtherError("AddressBook database not found. Please make sure AddressBook-v22.db exists in the project root directory.".to_string()))
+    // If we get here, we couldn't find the database
+    Err(AppError::OtherError("AddressBook database not found in Sources directory".to_string()))
 }
 
 // Read contacts from AddressBook database
@@ -1046,6 +1028,46 @@ async fn search_messages(query: String, show_only_my_messages: Option<bool>, sho
     })
 }
 
+// Add a new function to check permissions
+#[tauri::command]
+async fn check_permissions() -> Result<bool, AppError> {
+    // Check Messages database access
+    let messages_result = get_imessage_db_path().and_then(|path| {
+        Connection::open(&path)
+            .map_err(|e| {
+                if e.to_string().contains("unable to open database file") {
+                    AppError::PermissionError("No access to Messages".to_string())
+                } else {
+                    AppError::DatabaseConnectionError(e)
+                }
+            })
+    });
+
+    // Check Contacts database access
+    let contacts_result = {
+        let home = dirs::home_dir()
+            .ok_or(AppError::OtherError("Home directory not found".to_string()))?;
+        let sources_dir = home.join("Library/Application Support/AddressBook/Sources");
+        
+        if !sources_dir.exists() {
+            Err(AppError::PermissionError("No access to Contacts".to_string()))
+        } else {
+            // Try to read the directory
+            match fs::read_dir(&sources_dir) {
+                Ok(_) => Ok(()),
+                Err(_) => Err(AppError::PermissionError("No access to Contacts".to_string()))
+            }
+        }
+    };
+
+    match (messages_result, contacts_result) {
+        (Ok(_), Ok(_)) => Ok(true),
+        (Err(AppError::PermissionError(_)), _) | (_, Err(AppError::PermissionError(_))) => Ok(false),
+        (Err(e), _) => Err(e),
+        (_, Err(e)) => Err(e),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1054,7 +1076,8 @@ pub fn run() {
             get_conversations,
             get_messages,
             search_messages,
-            read_contacts
+            read_contacts,
+            check_permissions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

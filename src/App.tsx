@@ -1,7 +1,9 @@
 import { AdvancedSearch, SearchParams } from "@/components/AdvancedSearch"
 import Loader from "@/components/Loader"
 import { MessagesView } from "@/components/MessagesView"
+import PermissionsScreen from "@/components/PermissionsScreen"
 import { Badge } from "@/components/ui/badge"
+import { usePermissions } from "@/hooks/usePermissions"
 import { Contact, Conversation, Message, SearchResult } from "@/types"
 import { invoke } from "@tauri-apps/api/core"
 import { format } from "date-fns"
@@ -23,6 +25,7 @@ function App() {
 		Record<string, string>
 	>({})
 	const [searchParams, setSearchParams] = useState<SearchParams | null>(null)
+	const { hasPermissions, isLoading: permissionsLoading } = usePermissions()
 
 	// Parse contacts data into a usable map when contactsData changes
 
@@ -382,7 +385,11 @@ function App() {
 	])
 
 	// Combine loading states for overall app loading state
-	const isAppLoading = loading || contactsLoading
+	const isAppLoading = loading || contactsLoading || permissionsLoading
+
+	if (!hasPermissions && !permissionsLoading) {
+		return <PermissionsScreen />
+	}
 
 	return (
 		<div className='flex h-screen w-screen'>
