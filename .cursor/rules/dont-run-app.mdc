@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-Never run the app. Always assume the user is running the app in their own terminal.
