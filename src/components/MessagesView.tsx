@@ -3,9 +3,12 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Contact, Message } from "@/types"
-import { convertFileSrc } from "@tauri-apps/api/core"
+import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import { homeDir } from "@tauri-apps/api/path"
+import { openUrl } from "@tauri-apps/plugin-opener"
+import { MessageCircle } from "lucide-react"
 import { useEffect, useState } from "react"
+import { toast } from "sonner"
 import { Button } from "./ui/button"
 
 type MessagesViewProps = {
@@ -78,6 +81,16 @@ export function MessagesView({
 		// Get the home directory path when component mounts
 		homeDir().then(setHomePath).catch(console.error)
 	}, [])
+
+	const openInMessages = async (chatId: string) => {
+		try {
+			openUrl(`messages://`)
+			await invoke("open_imessage_conversation", { chatId })
+		} catch (error) {
+			console.error("Failed to open conversation:", error)
+			toast.error("Failed to open conversation in Messages")
+		}
+	}
 
 	// Add a function to get conversation name
 	const getConversationName = (chatId: string | undefined) => {
@@ -153,22 +166,34 @@ export function MessagesView({
 													{getConversationName(message.chat_id)}
 												</div>
 											</div>
-											<Button
-												variant='outline'
-												onClick={() => {
-													console.log(message.contact)
-												}}
-											>
-												log contact
-											</Button>
-											<Button
-												variant='outline'
-												onClick={() => {
-													console.log(message)
-												}}
-											>
-												log message
-											</Button>
+											<div className='flex items-center gap-2'>
+												{message.chat_id && (
+													<Button
+														variant='outline'
+														size='sm'
+														onClick={() => openInMessages(message.chat_id!)}
+													>
+														<MessageCircle className='h-4 w-4 mr-2' />
+														Open in Messages
+													</Button>
+												)}
+												<Button
+													variant='outline'
+													onClick={() => {
+														console.log(message.contact)
+													}}
+												>
+													log contact
+												</Button>
+												<Button
+													variant='outline'
+													onClick={() => {
+														console.log(message)
+													}}
+												>
+													log message
+												</Button>
+											</div>
 											<div className='text-xs text-muted-foreground'>
 												{new Date(message.date * 1000).toLocaleString()}
 											</div>

@@ -7,6 +7,7 @@ use std::fmt;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rusqlite::OptionalExtension;
 use chrono;
+use std::process::Command;
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -1068,6 +1069,41 @@ async fn check_permissions() -> Result<bool, AppError> {
     }
 }
 
+#[tauri::command]
+async fn open_imessage_conversation(chat_id: String) -> Result<(), AppError> {
+    // Only proceed on macOS
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"tell application "Messages" to show chat id "iMessage;-;{}"#,
+            chat_id
+        );
+
+        println!("Script: {}", script);
+        println!("Open IM Message Chat ID: {}", chat_id);
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| AppError::OtherError(format!("Failed to execute AppleScript: {}", e)))?;
+
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::OtherError(format!("AppleScript failed: {}", error)));
+        }
+
+        println!("Output: {}", output.status);
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(AppError::OtherError("This feature is only available on macOS".to_string()))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1077,7 +1113,8 @@ pub fn run() {
             get_messages,
             search_messages,
             read_contacts,
-            check_permissions
+            check_permissions,
+            open_imessage_conversation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

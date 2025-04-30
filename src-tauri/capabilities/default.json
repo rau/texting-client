@@ -15,6 +15,9 @@
         },
         {
           "url": "x-apple.settings:*"
+        },
+        {
+          "url": "messages://*"
         }
       ]
     }
