@@ -1,50 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "iMessage Viewer",
-  "version": "0.1.0",
-  "identifier": "com.imessage-viewer.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:1420",
     "distDir": "../dist"
   },
-  "app": {
-    "windows": [
-      {
-        "title": "iMessage Viewer",
-        "width": 1024,
-        "height": 768,
-        "minWidth": 800,
-        "minHeight": 600,
-        "center": true
-      }
-    ],
-    "security": {
-      "csp": "default-src 'self' asset: https://asset.localhost",
-      "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "**"
-        ]
-      }
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
-  },
-  "package": {
-    "productName": "iMessage Search",
-    "version": "1.0.0"
-  },
+  "identifier": "com.imessage.search",
+  "productName": "iMessage Search",
+  "version": "1.0.0",
   "tauri": {
     "allowlist": {
       "all": false,
@@ -65,8 +29,7 @@
     "bundle": {
       "active": true,
       "targets": [
-        "dmg",
-        "updater"
+        "dmg"
       ],
       "identifier": "com.imessage.search",
       "icon": [
@@ -84,7 +47,17 @@
       }
     },
     "security": {
-      "csp": null
-    }
+      "csp": "default-src 'self' asset: https://asset.localhost"
+    },
+    "windows": [
+      {
+        "title": "iMessage Search",
+        "width": 1024,
+        "height": 768,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ]
   }
 }
