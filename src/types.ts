@@ -19,6 +19,7 @@ export type Message = {
 	sender_name?: string
 	contact?: Contact
 	attachment_path?: string
+	attachment_mime_type?: string
 	conversation_name: string
 }
 
@@ -41,4 +42,37 @@ export type ContactPhoto = {
 	full_photo: string | null
 	thumbnail: string | null
 	legacy_photo: string | null
+}
+
+export type ConversationType = "all" | "direct" | "group"
+
+export type ConversationInfo = {
+	id: string
+	name: string
+	participants: {
+		id: string
+		name: string
+		type: "contact"
+	}[]
+}
+
+export type AttachmentType =
+	| "all"
+	| "image"
+	| "video"
+	| "pdf"
+	| "audio"
+	| "other"
+
+export type SearchParams = {
+	query: string
+	startDate: Date | undefined
+	endDate: Date | undefined
+	selectedContacts: Contact[]
+	selectedConversation: ConversationInfo | null
+	showOnlyMyMessages: boolean
+	showOnlyAttachments: boolean
+	sortDirection: "asc" | "desc"
+	conversationType: ConversationType
+	attachmentType: AttachmentType
 }

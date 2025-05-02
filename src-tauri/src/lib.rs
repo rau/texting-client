@@ -32,6 +32,7 @@ pub struct Message {
     chat_id: Option<String>,
     sender_name: Option<String>,
     attachment_path: Option<String>,
+    attachment_mime_type: Option<String>,
     conversation_name: Option<String>,
 }
 
@@ -753,10 +754,11 @@ async fn get_conversations() -> Result<Vec<Conversation>, AppError> {
 }
 
 // Fix the get_message_attachments function
-fn get_message_attachments(conn: &Connection, message_id: i64) -> Result<Option<String>, rusqlite::Error> {
+fn get_message_attachments(conn: &Connection, message_id: i64) -> Result<(Option<String>, Option<String>), rusqlite::Error> {
     let mut stmt = conn.prepare(r#"
         SELECT 
-            a.filename
+            a.filename,
+            a.mime_type
         FROM 
             attachment a
         JOIN 
@@ -767,8 +769,8 @@ fn get_message_attachments(conn: &Connection, message_id: i64) -> Result<Option<
     "#)?;
 
     stmt.query_row([message_id], |row| {
-        row.get::<_, String>(0)
-    }).optional()
+        Ok((row.get::<_, String>(0).optional()?, row.get::<_, String>(1).optional()?))
+    }).optional().map(|opt| opt.unwrap_or((None, None)))
 }
 
 #[tauri::command]
@@ -832,10 +834,10 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
         // Get conversation name
         let conversation_name: Option<String> = row.get(6)?;
 
-        // Get attachment path
-        let attachment_path = match get_message_attachments(&conn, message_id) {
-            Ok(path) => path,
-            Err(_) => None,
+        // Get attachment path and mime type
+        let (attachment_path, attachment_mime_type) = match get_message_attachments(&conn, message_id) {
+            Ok((path, mime)) => (path, mime),
+            Err(_) => (None, None),
         };
         
         Ok(Message {
@@ -846,6 +848,7 @@ async fn get_messages(conversation_id: String) -> Result<Vec<Message>, AppError>
             chat_id: Some(conversation_id.clone()),
             sender_name,
             attachment_path,
+            attachment_mime_type,
             conversation_name,
         })
     })?;
@@ -890,6 +893,7 @@ struct SearchParams {
     show_only_attachments: bool,
     sort_direction: String,      // "asc" or "desc"
     conversation_type: String,   // "all", "direct", or "group"
+    attachment_type: String,     // "all", "image", "video", "pdf", "audio", "other"
 }
 
 // Add this helper function at the top level, before search_messages
@@ -919,7 +923,14 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
                 JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
                 WHERE maj.message_id = m.ROWID 
                 LIMIT 1
-            ) as attachment_path
+            ) as attachment_path,
+            (
+                SELECT a.mime_type 
+                FROM attachment a 
+                JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+                WHERE maj.message_id = m.ROWID 
+                LIMIT 1
+            ) as attachment_mime_type
         FROM 
             message m
         INNER JOIN 
@@ -1023,6 +1034,23 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
         )");
     }
 
+    // Add attachment type filter if a specific type is selected
+    if params.attachment_type != "all" {
+        sql.push_str(" AND EXISTS (
+            SELECT 1 
+            FROM attachment a 
+            JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+            WHERE maj.message_id = m.ROWID
+            AND CASE 
+                WHEN a.mime_type LIKE 'image/%' THEN 'image'
+                WHEN a.mime_type LIKE 'video/%' THEN 'video'
+                WHEN a.mime_type = 'application/pdf' THEN 'pdf'
+                WHEN a.mime_type LIKE 'audio/%' THEN 'audio'
+                ELSE 'other'
+            END = ?
+        )");
+    }
+
     // Add conversation type filter
     if params.conversation_type != "all" {
         sql.push_str(" AND EXISTS (
@@ -1052,7 +1080,29 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
     println!("Executing SQL: {}", sql);
 
     let mut stmt = conn.prepare(&sql)?;
-    let message_iter = stmt.query_map([], |row| {
+    
+    // Create a vector to store the parameters
+    let mut query_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    
+    // Add attachment type parameter if needed
+    if params.attachment_type != "all" {
+        sql.push_str(" AND EXISTS (
+            SELECT 1 
+            FROM attachment a 
+            JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID 
+            WHERE maj.message_id = m.ROWID
+            AND CASE 
+                WHEN a.mime_type LIKE 'image/%' THEN 'image'
+                WHEN a.mime_type LIKE 'video/%' THEN 'video'
+                WHEN a.mime_type = 'application/pdf' THEN 'pdf'
+                WHEN a.mime_type LIKE 'audio/%' THEN 'audio'
+                ELSE 'other'
+            END = ?
+        )");
+        query_params.push(&params.attachment_type);
+    }
+    
+    let message_iter = stmt.query_map(rusqlite::params_from_iter(query_params.iter()), |row| {
         let message_id: i64 = row.get(0)?;
         let text: Option<String> = row.get(1)?;
         
@@ -1081,6 +1131,7 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
         };
 
         let attachment_path: Option<String> = row.get(7).ok();
+        let attachment_mime_type: Option<String> = row.get(8).ok();
         
         Ok(Message {
             id: message_id,
@@ -1090,6 +1141,7 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
             chat_id,
             sender_name,
             attachment_path,
+            attachment_mime_type,
             conversation_name: None,
         })
     })?;

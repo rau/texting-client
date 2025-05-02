@@ -22,12 +22,17 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
-import { Contact } from "@/types"
+import { AttachmentType, Contact, ConversationType } from "@/types"
 import { format } from "date-fns"
 import {
 	Calendar as CalendarIcon,
 	Check,
 	ChevronDown,
+	FileAudio,
+	FileImage,
+	FileText,
+	FileVideo,
+	Files,
 	MessageCircle,
 	MessagesSquare,
 	Search,
@@ -54,8 +59,6 @@ type AdvancedSearchProps = {
 	conversations: ConversationInfo[]
 }
 
-export type ConversationType = "all" | "direct" | "group"
-
 export type SearchParams = {
 	query: string
 	startDate: Date | undefined
@@ -66,6 +69,7 @@ export type SearchParams = {
 	showOnlyAttachments: boolean
 	sortDirection: "asc" | "desc"
 	conversationType: ConversationType
+	attachmentType: AttachmentType
 }
 
 export function AdvancedSearch({
@@ -83,6 +87,7 @@ export function AdvancedSearch({
 		showOnlyAttachments: false,
 		sortDirection: "desc",
 		conversationType: "all",
+		attachmentType: "all",
 	})
 	const [showOnlyContactsWithPhotos, setShowOnlyContactsWithPhotos] =
 		useState(false)
@@ -124,6 +129,32 @@ export function AdvancedSearch({
 			(a, b) => a.first_name?.localeCompare(b.first_name || "") || 0
 		)
 	}, [contacts, showOnlyContactsWithPhotos])
+
+	// Add this after the Show Only Messages with Attachments Toggle
+	const attachmentTypes: {
+		value: AttachmentType
+		label: string
+		icon: React.ReactNode
+	}[] = [
+		{ value: "all", label: "All Types", icon: <Files className='h-4 w-4' /> },
+		{
+			value: "image",
+			label: "Images",
+			icon: <FileImage className='h-4 w-4' />,
+		},
+		{
+			value: "video",
+			label: "Videos",
+			icon: <FileVideo className='h-4 w-4' />,
+		},
+		{ value: "pdf", label: "PDFs", icon: <FileText className='h-4 w-4' /> },
+		{ value: "audio", label: "Audio", icon: <FileAudio className='h-4 w-4' /> },
+		{
+			value: "other",
+			label: "Other Files",
+			icon: <Files className='h-4 w-4' />,
+		},
+	]
 
 	return (
 		<div className='w-80 border-r border-border flex flex-col'>
@@ -224,6 +255,41 @@ export function AdvancedSearch({
 								})
 							}}
 						/>
+					</div>
+				</div>
+
+				{/* Add this after the Show Only Messages with Attachments Toggle */}
+				<div className='space-y-2 mb-4'>
+					<Label className='text-sm font-medium'>Attachment Type</Label>
+					<div className='grid grid-cols-2 gap-2'>
+						{attachmentTypes.map((type) => (
+							<Button
+								key={type.value}
+								variant={
+									searchParams.attachmentType === type.value
+										? "default"
+										: "outline"
+								}
+								className={cn(
+									"flex items-center gap-2 justify-start",
+									searchParams.attachmentType === type.value &&
+										"bg-primary text-primary-foreground"
+								)}
+								onClick={() => {
+									setSearchParams((prev) => {
+										const newParams = {
+											...prev,
+											attachmentType: type.value,
+										}
+										onSearch(newParams)
+										return newParams
+									})
+								}}
+							>
+								{type.icon}
+								<span className='text-sm'>{type.label}</span>
+							</Button>
+						))}
 					</div>
 				</div>
 

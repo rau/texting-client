@@ -1,16 +1,13 @@
 import Loader from "@/components/Loader"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
+import { cn } from "@/lib/utils"
 import { Contact, Message } from "@/types"
-import { convertFileSrc, invoke } from "@tauri-apps/api/core"
+import { convertFileSrc } from "@tauri-apps/api/core"
 import { homeDir } from "@tauri-apps/api/path"
-import { openUrl } from "@tauri-apps/plugin-opener"
-import { MessageCircle } from "lucide-react"
 import { useEffect, useState } from "react"
-import { toast } from "sonner"
-import { Button } from "./ui/button"
-
+import { Badge } from "./ui/badge"
 type MessagesViewProps = {
 	loading: boolean
 	messages: Message[]
@@ -69,6 +66,84 @@ const formatContactName = (
 	}
 }
 
+// Add this helper function to render attachments based on MIME type
+const AttachmentView = ({
+	path,
+	mimeType,
+	getAssetUrl,
+}: {
+	path: string
+	mimeType?: string
+	getAssetUrl: (path: string) => string
+}) => {
+	const url = getAssetUrl(path)
+
+	// Handle images
+	if (mimeType?.startsWith("image/")) {
+		return (
+			<img
+				src={url}
+				alt='Image attachment'
+				className='max-w-sm rounded-lg shadow-lg'
+			/>
+		)
+	}
+
+	// Handle videos
+	if (mimeType?.startsWith("video/")) {
+		return (
+			<video controls className='max-w-sm rounded-lg shadow-lg'>
+				<source src={url} type={mimeType} />
+				Your browser does not support the video tag.
+			</video>
+		)
+	}
+
+	// Handle PDFs
+	if (mimeType === "application/pdf") {
+		return (
+			<div className='flex flex-col gap-2'>
+				<object
+					data={url}
+					type='application/pdf'
+					className='max-w-sm h-[400px] rounded-lg shadow-lg'
+				>
+					<p>
+						Unable to display PDF.{" "}
+						<a
+							href={url}
+							target='_blank'
+							rel='noreferrer'
+							className='text-primary hover:underline'
+						>
+							Open PDF
+						</a>
+					</p>
+				</object>
+			</div>
+		)
+	}
+
+	// Handle audio
+	if (mimeType?.startsWith("audio/")) {
+		return (
+			<audio controls className='max-w-sm'>
+				<source src={url} type={mimeType} />
+				Your browser does not support the audio element.
+			</audio>
+		)
+	}
+
+	// For all other types, show a download link
+	return (
+		<Button variant='outline' size='sm' asChild>
+			<a href={url} target='_blank' rel='noreferrer' className='no-underline'>
+				Download Attachment
+			</a>
+		</Button>
+	)
+}
+
 export function MessagesView({
 	loading,
 	messages,
@@ -81,16 +156,6 @@ export function MessagesView({
 		// Get the home directory path when component mounts
 		homeDir().then(setHomePath).catch(console.error)
 	}, [])
-
-	const openInMessages = async (chatId: string) => {
-		try {
-			openUrl(`messages://`)
-			await invoke("open_imessage_conversation", { chatId })
-		} catch (error) {
-			console.error("Failed to open conversation:", error)
-			toast.error("Failed to open conversation in Messages")
-		}
-	}
 
 	// Add a function to get conversation name
 	const getConversationName = (chatId: string | undefined) => {
@@ -138,7 +203,7 @@ export function MessagesView({
 	}
 
 	return (
-		<div className='flex-1 flex flex-col overflow-y-auto'>
+		<div className='flex flex-col overflow-y-auto'>
 			<ScrollArea className='flex-1'>
 				<div className='p-4 space-y-3'>
 					{messages.map((message) => {
@@ -146,74 +211,89 @@ export function MessagesView({
 						return (
 							<div
 								key={message.id}
-								className='border border-border rounded-lg p-4 hover:bg-muted/50 transition-colors'
+								className={cn(
+									"overflow-hidden border rounded-xl",
+									message.is_from_me ? "border-blue-100" : "border-border"
+								)}
 							>
-								<div className='flex items-start gap-3'>
-									<Avatar className='h-10 w-10'>
-										<AvatarImage
-											src={message.contact?.photo?.full_photo || ""}
-											alt={contactInfo.displayName}
-										/>
-										<AvatarFallback>{contactInfo.initials}</AvatarFallback>
-									</Avatar>
-									<div className='flex-1'>
-										<div className='flex items-center justify-between mb-1'>
-											<div className='flex flex-col'>
-												<div className='font-medium'>
-													{message.is_from_me ? "You" : contactInfo.displayName}
-												</div>
-												<div className='text-xs text-muted-foreground'>
-													{getConversationName(message.chat_id)}
-												</div>
-											</div>
-											<div className='flex items-center gap-2'>
-												{message.chat_id && (
-													<Button
-														variant='outline'
-														size='sm'
-														onClick={() => openInMessages(message.chat_id!)}
+								<div className='flex flex-row items-center justify-between p-3 bg-muted/30'>
+									<div className='flex items-center gap-3'>
+										<Avatar className={cn("h-9 w-9")}>
+											<AvatarImage
+												src={message.contact?.photo?.full_photo || ""}
+												alt={contactInfo.displayName}
+											/>
+											<AvatarFallback>{contactInfo.initials}</AvatarFallback>
+										</Avatar>
+
+										<div>
+											<div className='font-medium text-sm flex items-center gap-2'>
+												{message.is_from_me ? "Me" : contactInfo.displayName}
+												{message.is_from_me && (
+													<Badge
+														variant='secondary'
+														className='text-[10px] font-normal py-0 h-4'
 													>
-														<MessageCircle className='h-4 w-4 mr-2' />
-														Open in Messages
-													</Button>
+														Me
+													</Badge>
 												)}
-												<Button
-													variant='outline'
-													onClick={() => {
-														console.log(message.contact)
-													}}
-												>
-													log contact
-												</Button>
-												<Button
-													variant='outline'
-													onClick={() => {
-														console.log(message)
-													}}
-												>
-													log message
-												</Button>
 											</div>
-											<div className='text-xs text-muted-foreground'>
-												{new Date(message.date * 1000).toLocaleString()}
+											<div className='text-xs text-muted-foreground flex items-center gap-1'>
+												<span>{getConversationName(message.chat_id)}</span>
 											</div>
 										</div>
-										<p className='mt-1 text-xs opacity-50'>
-											{!message.is_from_me && contactInfo.identifier}
-										</p>
-
-										<Separator className='my-2' />
-										<div className='text-sm'>{message.text}</div>
-										{message.attachment_path && (
-											<div className='text-xs text-muted-foreground mt-2'>
-												<img
-													src={getAssetUrl(message.attachment_path)}
-													alt='Attachment'
-													className='max-w-sm rounded-lg shadow-lg'
-												/>
-											</div>
-										)}
 									</div>
+									<div className='text-xs text-muted-foreground'>
+										{new Date(message.date * 1000).toLocaleString()}
+									</div>
+								</div>
+								<div
+									className={cn(
+										"p-3",
+										message.is_from_me ? "bg-blue-50" : "bg-background"
+									)}
+								>
+									{message.attachment_path === null && (
+										<div className='flex'>
+											<div
+												className={cn(
+													"py-2 px-3 rounded-2xl text-sm max-w-[85%]",
+													message.is_from_me
+														? "bg-blue-500 text-white ml-auto rounded-tr-sm"
+														: "bg-muted rounded-tl-sm"
+												)}
+											>
+												{message.text}
+											</div>
+										</div>
+									)}
+									{message.attachment_path && (
+										<div className='text-xs text-muted-foreground mt-2'>
+											<AttachmentView
+												path={message.attachment_path}
+												mimeType={message.attachment_mime_type}
+												getAssetUrl={getAssetUrl}
+											/>
+										</div>
+									)}
+								</div>
+								<div className='p-2 flex justify-end gap-2 border-t border-border bg-muted/30'>
+									<Button
+										variant='outline'
+										onClick={() => {
+											console.log(message.contact)
+										}}
+									>
+										log contact
+									</Button>
+									<Button
+										variant='outline'
+										onClick={() => {
+											console.log(message)
+										}}
+									>
+										log message
+									</Button>
 								</div>
 							</div>
 						)

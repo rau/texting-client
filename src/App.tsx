@@ -192,25 +192,27 @@ function App() {
 						})
 						const messagesArray = fetchedMessages as Message[]
 
-						// Update the messages by conversation map
+						// Update the messages by conversation map with raw messages first
 						setMessagesByConversation((prev) => ({
 							...prev,
 							[conversation.id]: messagesArray,
 						}))
 
-						// Process messages to get proper names
-						const messagesWithNames = applyContactsToMessages(messagesArray)
-						const title = generateConversationTitle(
-							conversation,
-							messagesWithNames
-						)
+						// Process messages to get proper names if contacts are available
+						if (contacts) {
+							const messagesWithNames = applyContactsToMessages(messagesArray)
+							const title = generateConversationTitle(
+								conversation,
+								messagesWithNames
+							)
 
-						// Update the title if we got something meaningful
-						if (title !== "Conversation") {
-							setConversationTitles((prev) => ({
-								...prev,
-								[conversation.id]: title,
-							}))
+							// Update the title if we got something meaningful
+							if (title !== "Conversation") {
+								setConversationTitles((prev) => ({
+									...prev,
+									[conversation.id]: title,
+								}))
+							}
 						}
 					} catch (error) {
 						console.error(
@@ -277,7 +279,10 @@ function App() {
 
 	// Function to refresh all data
 	const refreshData = useCallback(async () => {
-		await Promise.all([loadConversations(), loadContacts()])
+		// Load contacts first
+		await loadContacts()
+		// Then load conversations
+		await loadConversations()
 	}, [])
 
 	// Handle keyboard shortcuts
@@ -347,6 +352,7 @@ function App() {
 					show_only_attachments: params.showOnlyAttachments,
 					sort_direction: params.sortDirection,
 					conversation_type: params.conversationType,
+					attachment_type: params.attachmentType,
 				}
 
 				console.log("Search params:", searchParams)
@@ -369,7 +375,7 @@ function App() {
 			handleSearch(searchParams)
 		} else {
 			// Initial empty search with default params
-			handleSearch({
+			const defaultParams: SearchParams = {
 				query: "",
 				selectedContacts: [],
 				startDate: undefined,
@@ -377,15 +383,38 @@ function App() {
 				selectedConversation: null,
 				showOnlyMyMessages: false,
 				showOnlyAttachments: false,
-				sortDirection: "asc",
+				sortDirection: "asc" as const,
 				conversationType: "all",
-			})
+				attachmentType: "all",
+			}
+			handleSearch(defaultParams)
 		}
 	}, [
 		handleSearch,
 		searchParams?.showOnlyMyMessages,
 		searchParams?.showOnlyAttachments,
 	])
+
+	// Effect to update conversation titles and messages when contacts change
+	useEffect(() => {
+		if (!contacts || !conversations.length) return
+
+		// Update conversation titles
+		const updatedTitles: Record<string, string> = {}
+		for (const conv of conversations) {
+			const messages = messagesByConversation[conv.id] || []
+			const title = generateConversationTitle(conv, messages)
+			updatedTitles[conv.id] = title
+		}
+		setConversationTitles(updatedTitles)
+
+		// Update messages with contact information
+		const updatedMessages: Record<string, Message[]> = {}
+		for (const [convId, messages] of Object.entries(messagesByConversation)) {
+			updatedMessages[convId] = applyContactsToMessages(messages)
+		}
+		setMessagesByConversation(updatedMessages)
+	}, [contacts, conversations, messagesByConversation])
 
 	// Combine loading states for overall app loading state
 	const isAppLoading = loading || contactsLoading || permissionsLoading
