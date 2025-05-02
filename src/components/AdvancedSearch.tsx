@@ -67,6 +67,7 @@ export type SearchParams = {
 	selectedConversation: ConversationInfo | null
 	showOnlyMyMessages: boolean
 	showOnlyAttachments: boolean
+	showOnlyLinks: boolean
 	sortDirection: "asc" | "desc"
 	conversationType: ConversationType
 	attachmentType: AttachmentType
@@ -85,6 +86,7 @@ export function AdvancedSearch({
 		selectedConversation: null,
 		showOnlyMyMessages: false,
 		showOnlyAttachments: false,
+		showOnlyLinks: false,
 		sortDirection: "desc",
 		conversationType: "all",
 		attachmentType: "all",
@@ -249,6 +251,29 @@ export function AdvancedSearch({
 									const newParams = {
 										...prev,
 										showOnlyAttachments: checked,
+									}
+									onSearch(newParams)
+									return newParams
+								})
+							}}
+						/>
+					</div>
+				</div>
+
+				{/* Show Only Messages with Links Toggle */}
+				<div className='space-y-2 mb-4'>
+					<div className='flex items-center justify-between'>
+						<Label htmlFor='show-links' className='text-sm font-medium'>
+							Show Only Messages with Links
+						</Label>
+						<Switch
+							id='show-links'
+							checked={searchParams.showOnlyLinks}
+							onCheckedChange={(checked) => {
+								setSearchParams((prev) => {
+									const newParams = {
+										...prev,
+										showOnlyLinks: checked,
 									}
 									onSearch(newParams)
 									return newParams

@@ -13,6 +13,9 @@ use simplelog::*;
 use std::fs::File;
 use std::time::Duration;
 use std::thread;
+use reqwest;
+use scraper;
+use url;
 
 // Define structs for our data
 #[derive(Serialize, Deserialize, Debug)]
@@ -891,6 +894,7 @@ struct SearchParams {
     conversation_id: Option<String>,
     show_only_my_messages: bool,
     show_only_attachments: bool,
+    show_only_links: bool,
     sort_direction: String,      // "asc" or "desc"
     conversation_type: String,   // "all", "direct", or "group"
     attachment_type: String,     // "all", "image", "video", "pdf", "audio", "other"
@@ -1022,6 +1026,11 @@ async fn search_messages(params: SearchParams) -> Result<SearchResult, AppError>
     // Add show_only_my_messages filter
     if params.show_only_my_messages {
         sql.push_str(" AND m.is_from_me = 1");
+    }
+
+    // Add show_only_links filter
+    if params.show_only_links {
+        sql.push_str(" AND (instr(m.text, 'http://') > 0 OR instr(m.text, 'https://') > 0)");
     }
 
     // Add show_only_attachments filter
@@ -1206,7 +1215,8 @@ pub fn run() {
             read_contacts,
             check_permissions,
             open_imessage_conversation,
-            restart_app
+            restart_app,
+            fetch_opengraph_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1406,5 +1416,81 @@ async fn open_imessage_conversation(chat_id: String) -> Result<(), AppError> {
 async fn restart_app(app_handle: tauri::AppHandle) {
     info!("Restarting app...");
     app_handle.restart();
+}
+
+#[derive(Debug, Serialize)]
+struct OpenGraphData {
+    title: Option<String>,
+    description: Option<String>,
+    image: Option<String>,
+    favicon: Option<String>,
+    site_name: Option<String>,
+}
+
+#[tauri::command]
+async fn fetch_opengraph_data(url: String) -> Result<OpenGraphData, String> {
+    let client = reqwest::Client::new();
+    
+    // Set a reasonable timeout
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .header("User-Agent", "Mozilla/5.0 (compatible; LinkPreview/1.0)")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let html = response.text().await.map_err(|e| e.to_string())?;
+    
+    // Use scraper to parse HTML and extract metadata
+    let document = scraper::Html::parse_document(&html);
+    let selector = scraper::Selector::parse("meta").unwrap();
+    
+    let mut data = OpenGraphData {
+        title: None,
+        description: None,
+        image: None,
+        favicon: None,
+        site_name: None,
+    };
+    
+    // Extract metadata from meta tags
+    for element in document.select(&selector) {
+        let property = element.value().attr("property").unwrap_or("");
+        let name = element.value().attr("name").unwrap_or("");
+        let content = element.value().attr("content").unwrap_or("");
+        
+        match property {
+            "og:title" => data.title = Some(content.to_string()),
+            "og:description" => data.description = Some(content.to_string()),
+            "og:image" => data.image = Some(content.to_string()),
+            "og:site_name" => data.site_name = Some(content.to_string()),
+            _ => {}
+        }
+        
+        // Fallback to standard meta tags if OpenGraph isn't available
+        if data.title.is_none() && name == "title" {
+            data.title = Some(content.to_string());
+        }
+        if data.description.is_none() && name == "description" {
+            data.description = Some(content.to_string());
+        }
+    }
+    
+    // Try to find favicon
+    let favicon_selector = scraper::Selector::parse("link[rel*='icon']").unwrap();
+    if let Some(favicon_element) = document.select(&favicon_selector).next() {
+        if let Some(href) = favicon_element.value().attr("href") {
+            // Convert relative URLs to absolute
+            if href.starts_with('/') {
+                let base_url = url::Url::parse(&url).map_err(|e| e.to_string())?;
+                data.favicon = Some(base_url.join(href).map_err(|e| e.to_string())?.to_string());
+            } else {
+                data.favicon = Some(href.to_string());
+            }
+        }
+    }
+    
+    Ok(data)
 }
 

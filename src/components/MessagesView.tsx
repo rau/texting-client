@@ -1,13 +1,16 @@
 import Loader from "@/components/Loader"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { Contact, Message } from "@/types"
-import { convertFileSrc } from "@tauri-apps/api/core"
+import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import { homeDir } from "@tauri-apps/api/path"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import { useEffect, useState } from "react"
-import { Badge } from "./ui/badge"
+
 type MessagesViewProps = {
 	loading: boolean
 	messages: Message[]
@@ -66,16 +69,203 @@ const formatContactName = (
 	}
 }
 
-// Add this helper function to render attachments based on MIME type
+// Add this helper function to check if an attachment is an OpenGraph preview
+const isOpenGraphPreview = (path: string): boolean => {
+	return path.toLowerCase().endsWith(".pluginpayloadattachment")
+}
+
+// Add this type for OpenGraph data
+type OpenGraphData = {
+	title?: string
+	description?: string
+	image?: string
+	favicon?: string
+	site_name?: string
+}
+
+// Add this component to render link previews
+const LinkPreview = ({ url }: { url: string }) => {
+	const [isHovered, setIsHovered] = useState(false)
+	const [metadata, setMetadata] = useState<OpenGraphData | null>(null)
+	const [loading, setLoading] = useState(true)
+	const [error, setError] = useState<string | null>(null)
+
+	const handleClick = async (e: React.MouseEvent) => {
+		e.preventDefault()
+		try {
+			await openUrl(url)
+		} catch (err) {
+			console.error("Failed to open URL:", err)
+		}
+	}
+
+	useEffect(() => {
+		const fetchMetadata = async () => {
+			try {
+				setLoading(true)
+				setError(null)
+				const data = await invoke<OpenGraphData>("fetch_opengraph_data", {
+					url,
+				})
+				setMetadata(data)
+			} catch (err) {
+				console.error("Error fetching metadata:", err)
+				setError("Failed to load preview")
+			} finally {
+				setLoading(false)
+			}
+		}
+
+		fetchMetadata()
+	}, [url])
+
+	if (loading) {
+		return (
+			<div className='max-w-sm rounded-lg border border-border overflow-hidden bg-muted/30'>
+				<Skeleton className='h-40 w-full' />
+				<div className='p-3'>
+					<Skeleton className='h-4 w-3/4 mb-2' />
+					<Skeleton className='h-3 w-1/2' />
+				</div>
+			</div>
+		)
+	}
+
+	if (error) {
+		return (
+			<a
+				href={url}
+				onClick={handleClick}
+				className='block max-w-sm no-underline'
+			>
+				<div className='rounded-lg border border-border overflow-hidden bg-muted/30 p-3'>
+					<div className='text-sm break-all text-foreground/90'>{url}</div>
+					<div className='text-xs text-muted-foreground mt-1'>
+						{new URL(url).hostname}
+					</div>
+				</div>
+			</a>
+		)
+	}
+
+	const title = metadata?.title || ""
+	const description = metadata?.description || ""
+	const image = metadata?.image
+	const siteName = metadata?.site_name || new URL(url).hostname
+	const favicon = metadata?.favicon
+
+	return (
+		<a
+			href={url}
+			onClick={handleClick}
+			className='block max-w-sm no-underline'
+			onMouseEnter={() => setIsHovered(true)}
+			onMouseLeave={() => setIsHovered(false)}
+		>
+			<div
+				className={cn(
+					"flex flex-col rounded-lg border border-border overflow-hidden bg-muted/30 transition-colors duration-200",
+					isHovered && "border-primary/50 bg-muted/50"
+				)}
+			>
+				{image && (
+					<div className='relative aspect-[1.91/1] w-full bg-muted'>
+						<img
+							src={image}
+							alt={title || "Link preview"}
+							className='absolute inset-0 w-full h-full object-cover'
+						/>
+					</div>
+				)}
+				<div className='p-3'>
+					<div className='flex items-center gap-2 mb-1'>
+						{favicon && (
+							<img
+								src={favicon}
+								alt=''
+								className='w-4 h-4 rounded-sm'
+								onError={(e) => {
+									// Hide favicon if it fails to load
+									;(e.target as HTMLImageElement).style.display = "none"
+								}}
+							/>
+						)}
+						<div className='text-xs text-muted-foreground'>{siteName}</div>
+					</div>
+					{title && (
+						<div className='font-medium text-sm line-clamp-2'>{title}</div>
+					)}
+					{description && (
+						<div className='text-xs text-muted-foreground mt-1 line-clamp-2'>
+							{description}
+						</div>
+					)}
+				</div>
+			</div>
+		</a>
+	)
+}
+
+// Also update the message text to make URLs clickable
+const MessageText = ({ text }: { text: string }) => {
+	// Regular expression to match URLs
+	const urlRegex = /(https?:\/\/[^\s]+)/g
+
+	// Split text into parts, with URLs as separate elements
+	const parts = text.split(urlRegex)
+	const urls = text.match(urlRegex) || ([] as string[])
+
+	const handleClick = async (url: string) => {
+		try {
+			await open(url)
+		} catch (err) {
+			console.error("Failed to open URL:", err)
+		}
+	}
+
+	return (
+		<div className='whitespace-pre-wrap break-words'>
+			{parts.map((part, index) => {
+				if (urls.includes(part)) {
+					return (
+						<a
+							key={index}
+							href={part}
+							onClick={(e) => {
+								e.preventDefault()
+								handleClick(part)
+							}}
+							className='text-blue-500 hover:underline'
+						>
+							{part}
+						</a>
+					)
+				}
+				return <span key={index}>{part}</span>
+			})}
+		</div>
+	)
+}
+
+// Modify the AttachmentView component
 const AttachmentView = ({
 	path,
 	mimeType,
 	getAssetUrl,
+	messageText,
 }: {
 	path: string
 	mimeType?: string
 	getAssetUrl: (path: string) => string
+	messageText?: string
 }) => {
+	// If this is an OpenGraph preview attachment and we have a URL in the message text,
+	// render the link preview instead
+	if (isOpenGraphPreview(path) && messageText?.match(/https?:\/\/[^\s]+/)) {
+		const url = messageText.match(/https?:\/\/[^\s]+/)?.[0] || ""
+		return <LinkPreview url={url} />
+	}
+
 	const url = getAssetUrl(path)
 
 	// Handle images
@@ -263,7 +453,7 @@ export function MessagesView({
 														: "bg-muted rounded-tl-sm"
 												)}
 											>
-												{message.text}
+												<MessageText text={message.text} />
 											</div>
 										</div>
 									)}
@@ -273,6 +463,7 @@ export function MessagesView({
 												path={message.attachment_path}
 												mimeType={message.attachment_mime_type}
 												getAssetUrl={getAssetUrl}
+												messageText={message.text}
 											/>
 										</div>
 									)}
